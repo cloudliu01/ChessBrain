@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import click
 
+from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
+from src.chessbrain.domain.training.self_play import SelfPlayCollector
 from src.chessbrain.domain.training.self_play_orchestrator import SelfPlayOrchestrator
 from src.chessbrain.infrastructure.config import load_config
 from src.chessbrain.infrastructure.persistence.base import (
@@ -36,7 +38,9 @@ def main(
     Base.metadata.create_all(bind=engine)
 
     device = resolve_device(config)
-    training_loop = TrainingLoop(device=device)
+    model = AlphaZeroResidualNetwork()
+    collector = SelfPlayCollector(device=device, exploration_epsilon=0.1, max_moves=128)
+    training_loop = TrainingLoop(device=device, model=model, collector=collector)
     checkpoint_publisher = FileCheckpointPublisher(config.model_checkpoint_dir)
 
     run_config = TrainingConfig(

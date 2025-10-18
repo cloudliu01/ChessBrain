@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
 from src.chessbrain.domain.training.self_play_orchestrator import SelfPlayOrchestrator
 from src.chessbrain.infrastructure.persistence.training_job_repository import (
     TrainingJobRepository,
@@ -9,7 +10,7 @@ from src.chessbrain.infrastructure.persistence.training_job_repository import (
 )
 from src.chessbrain.infrastructure.rl.checkpoint_publisher import FileCheckpointPublisher
 from src.chessbrain.infrastructure.rl.training_loop import TrainingConfig, TrainingLoop
-from src.chessbrain.infrastructure.rl.torch_compat import TORCH
+from src.chessbrain.infrastructure.rl.torch_compat import HAS_TORCH, TORCH
 
 
 def test_training_job_lifecycle(app_config, db_session) -> None:  # type: ignore[no-untyped-def]
@@ -19,7 +20,15 @@ def test_training_job_lifecycle(app_config, db_session) -> None:  # type: ignore
     tensorboard_root.mkdir(parents=True, exist_ok=True)
 
     repository = TrainingJobRepository(db_session)
-    training_loop = TrainingLoop(device=TORCH.device("cpu"))
+    device = TORCH.device("cpu")
+    model = AlphaZeroResidualNetwork(residual_blocks=1, channels=64) if HAS_TORCH else None
+    if HAS_TORCH:
+        from src.chessbrain.domain.training.self_play import SelfPlayCollector
+
+        collector = SelfPlayCollector(device=device, max_moves=32, exploration_epsilon=0.1)
+    else:
+        collector = None
+    training_loop = TrainingLoop(device=device, model=model, collector=collector)
     publisher = FileCheckpointPublisher(root=checkpoint_root)
 
     orchestrator = SelfPlayOrchestrator(

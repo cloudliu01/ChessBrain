@@ -2,13 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.chessbrain.domain.models.policy_value_network import (
-    AlphaZeroResidualNetwork,
-)
-from src.chessbrain.infrastructure.rl.training_loop import (
-    TrainingConfig,
-    TrainingLoop,
-)
+from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
+from src.chessbrain.infrastructure.rl.training_loop import TrainingConfig, TrainingLoop
 from src.chessbrain.infrastructure.rl.torch_compat import HAS_TORCH, TORCH
 
 
@@ -21,9 +16,13 @@ def test_training_loop_emits_metrics_and_checkpoint(tmp_path: Path) -> None:
         seed=42,
     )
     model = None
+    collector = None
     if HAS_TORCH:
+        from src.chessbrain.domain.training.self_play import SelfPlayCollector
+
         model = AlphaZeroResidualNetwork(residual_blocks=1, channels=64)
-    loop = TrainingLoop(device=TORCH.device("cpu"), model=model)
+        collector = SelfPlayCollector(device=TORCH.device("cpu"), max_moves=16, exploration_epsilon=0.1)
+    loop = TrainingLoop(device=TORCH.device("cpu"), model=model, collector=collector)
 
     first_batch = loop.run(config=config, start_episode=0, max_episodes=1)
     assert first_batch.episodes_played == 1

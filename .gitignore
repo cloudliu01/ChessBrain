@@ -3,3 +3,4 @@ ChessBrain/.codex
 venv312
 *pyc
 *.DS_Store
+tests/.artifacts

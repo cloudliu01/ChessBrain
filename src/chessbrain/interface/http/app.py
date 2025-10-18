@@ -3,6 +3,7 @@ from __future__ import annotations
 from flask import Flask
 
 from src.chessbrain.infrastructure.config import AppConfig, load_config
+from src.chessbrain.interface.http.model_routes import model_bp
 from src.chessbrain.interface.telemetry.logging import setup_logging, get_logger
 
 
@@ -22,9 +23,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
         ENV=cfg.flask_env,
     )
 
-    # Placeholder: register blueprints when story implementations land.
-    # from .gameplay_routes import gameplay_bp
-    # app.register_blueprint(gameplay_bp, url_prefix="/api/v1")
+    app.register_blueprint(model_bp, url_prefix="/api/v1/models")
 
     @app.get("/healthz")
     def healthcheck():

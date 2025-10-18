@@ -4,3 +4,4 @@ alembic>=1.13,<2.0
 structlog>=24.1,<25.0
 python-chess>=1.999,<2.0
 torch>=2.2,<3.0
+pytest>=8.2,<9.0

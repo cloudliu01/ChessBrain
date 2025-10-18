@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
 from src.chessbrain.domain.training.replay_buffer import ReplayBuffer
@@ -74,6 +74,7 @@ class TrainingLoop:
         config: TrainingConfig,
         start_episode: int,
         max_episodes: Optional[int] = None,
+        progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
     ) -> TrainingLoopResult:
         """Execute a bounded number of episodes starting from `start_episode`."""
         if start_episode >= config.total_episodes:
@@ -85,9 +86,19 @@ class TrainingLoop:
             return TrainingLoopResult(episodes_played=0, metrics=[], checkpoint_state=None)
 
         if not self._should_use_self_play():
-            return self._run_deterministic(config, start_episode, episodes_to_run)
+            return self._run_deterministic(
+                config,
+                start_episode,
+                episodes_to_run,
+                progress_callback,
+            )
 
-        return self._run_self_play(config, start_episode, episodes_to_run)
+        return self._run_self_play(
+            config,
+            start_episode,
+            episodes_to_run,
+            progress_callback,
+        )
 
     def attach_collector(self, collector: SelfPlayCollector) -> None:
         self._collector = collector
@@ -100,6 +111,7 @@ class TrainingLoop:
         config: TrainingConfig,
         start_episode: int,
         episodes_to_run: int,
+        progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
     ) -> TrainingLoopResult:
         metrics: list[EpisodeMetrics] = []
         checkpoint_state: Optional[dict] = None
@@ -113,14 +125,16 @@ class TrainingLoop:
             value_loss = max(0.01, 0.5 / denominator)
             win_rate = min(0.99, episode_index / max(1, config.total_episodes))
 
-            metrics.append(
-                EpisodeMetrics(
-                    episode_index=episode_index,
-                    policy_loss=policy_loss,
-                    value_loss=value_loss,
-                    win_rate=win_rate,
-                )
+            metric = EpisodeMetrics(
+                episode_index=episode_index,
+                policy_loss=policy_loss,
+                value_loss=value_loss,
+                win_rate=win_rate,
             )
+            metrics.append(metric)
+
+            if progress_callback is not None:
+                progress_callback(metric, episode_index, config.total_episodes)
 
             should_checkpoint = (
                 episode_index == config.total_episodes
@@ -145,6 +159,7 @@ class TrainingLoop:
         config: TrainingConfig,
         start_episode: int,
         episodes_to_run: int,
+        progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
     ) -> TrainingLoopResult:
         assert self._collector is not None
         assert self._model is not None
@@ -193,14 +208,16 @@ class TrainingLoop:
             TORCH.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=5.0)
             self._optimizer.step()
 
-            metrics.append(
-                EpisodeMetrics(
-                    episode_index=episode_index,
-                    policy_loss=float(policy_loss_tensor.detach().cpu().item()),
-                    value_loss=float(value_loss_tensor.detach().cpu().item()),
-                    win_rate=episode.win_rate,
-                )
+            metric = EpisodeMetrics(
+                episode_index=episode_index,
+                policy_loss=float(policy_loss_tensor.detach().cpu().item()),
+                value_loss=float(value_loss_tensor.detach().cpu().item()),
+                win_rate=episode.win_rate,
             )
+            metrics.append(metric)
+
+            if progress_callback is not None:
+                progress_callback(metric, episode_index, config.total_episodes)
 
             should_checkpoint = (
                 episode_index == config.total_episodes

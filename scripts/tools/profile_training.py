@@ -121,5 +121,5 @@ def main() -> None:
     print(prof.key_averages().table(sort_by="self_cpu_time_total", row_limit=20))
 
 
-+if __name__ == "__main__":
-+    main()
+if __name__ == "__main__":
+    main()

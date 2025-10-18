@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from datetime import datetime, timezone
+import time
 from pathlib import Path
 from typing import Iterable
 from uuid import UUID, uuid4
@@ -49,11 +50,27 @@ class SelfPlayOrchestrator:
         )
         job = self._repository.mark_running(job_id)
 
+        start_time = time.time()
+
+        def progress(metric, current_episode: int, total_episodes: int) -> None:
+            percent = 0
+            if total_episodes > 0:
+                percent = int(current_episode * 100 / total_episodes)
+            elapsed = time.time() - start_time
+            print(
+                f"[training] episode {current_episode}/{total_episodes}"
+                f" ({percent}%) | policy_loss={metric.policy_loss:.4f}"
+                f" value_loss={metric.value_loss:.4f} win_rate={metric.win_rate:.2f}"
+                f" elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+
         try:
             result = self._training_loop.run(
                 config=config,
                 start_episode=job.episodes_played,
                 max_episodes=config.total_episodes,
+                progress_callback=progress,
             )
 
             episodes_played = job.episodes_played + result.episodes_played

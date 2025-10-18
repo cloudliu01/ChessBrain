@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from src.chessbrain.infrastructure.rl.torch_compat import TORCH
+from src.chessbrain.domain.models.policy_value_network import (
+    AlphaZeroResidualNetwork,
+    BOARD_CHANNELS,
+)
+from src.chessbrain.infrastructure.rl.torch_compat import HAS_TORCH, TORCH
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,8 +43,13 @@ class TrainingLoopResult:
 class TrainingLoop:
     """Simplified self-play training loop with deterministic metrics."""
 
-    def __init__(self, device: Any) -> None:
+    def __init__(self, device: Any, model: Optional[Any] = None) -> None:
         self._device = device
+        self._model = model
+        if HAS_TORCH and self._model is None:
+            self._model = AlphaZeroResidualNetwork().to(self._device)
+        if HAS_TORCH and self._model is not None:
+            self._model.to(self._device)
 
     def run(
         self,
@@ -64,10 +73,32 @@ class TrainingLoop:
 
         for offset in range(episodes_to_run):
             episode_index = start_episode + offset + 1
-            denominator = episode_index + config.batch_size
-            policy_loss = max(0.01, 1.0 / denominator)
-            value_loss = max(0.01, 0.5 / denominator)
-            win_rate = min(0.99, episode_index / config.total_episodes)
+            if HAS_TORCH and self._model is not None:
+                self._model.train()
+                features = TORCH.randn(
+                    (1, BOARD_CHANNELS, 8, 8),
+                    device=self._device,
+                )
+                target_policy = TORCH.randint(
+                    0, self._model.action_space_size, (1,), device=self._device
+                )
+                target_value = TORCH.rand((1, 1), device=self._device) * 2 - 1
+
+                output = self._model(features)
+                policy_logits = output.flatten_policy()
+                policy_loss_tensor = TORCH.nn.functional.cross_entropy(
+                    policy_logits, target_policy
+                )
+                value_loss_tensor = TORCH.nn.functional.mse_loss(output.value, target_value)
+
+                policy_loss = float(policy_loss_tensor.item())
+                value_loss = float(value_loss_tensor.item())
+                win_rate = float(((target_value > 0).float().mean()).item())
+            else:
+                denominator = episode_index + config.batch_size
+                policy_loss = max(0.01, 1.0 / denominator)
+                value_loss = max(0.01, 0.5 / denominator)
+                win_rate = min(0.99, episode_index / config.total_episodes)
 
             metrics.append(
                 EpisodeMetrics(
@@ -89,6 +120,11 @@ class TrainingLoop:
                     "device": self._device.type,
                     "exploration_rate": config.exploration_rate,
                 }
+                if HAS_TORCH and self._model is not None:
+                    checkpoint_state["model_state_dict"] = {
+                        key: value.detach().cpu()
+                        for key, value in self._model.state_dict().items()
+                    }
 
         return TrainingLoopResult(
             episodes_played=episodes_to_run,

@@ -7,7 +7,7 @@
 
 ## Summary
 
-Deliver an end-to-end ChessBrain platform that combines a browser-based chess client, Flask backend, PostgreSQL persistence, and a PyTorch reinforcement-learning engine capable of self-play training and live inference. The system must support public gameplay, researcher-oriented training controls, and transparent storage of models, games, and metrics across macOS CPU and NVIDIA GPU environments.
+Deliver an end-to-end ChessBrain platform that combines a browser-based chess client, Flask backend, PostgreSQL persistence, and a PyTorch reinforcement-learning engine capable of self-play training and live inference. Training executes as a standalone flow (CLI/worker driven) that produces versioned checkpoints, while the public-facing stack only consumes published models via a plug-in inference interface. The system must support public gameplay, researcher-oriented training controls, and transparent storage of models, games, and metrics across macOS CPU and NVIDIA GPU environments.
 
 ## Technical Context
 
@@ -24,14 +24,14 @@ Deliver an end-to-end ChessBrain platform that combines a browser-based chess cl
 **Target Platform**: macOS (Apple Silicon/Intel) dev hosts; Linux + NVIDIA CUDA for training  
 **Project Type**: Web + backend + ML engine (multi-service with shared domain package)  
 **Performance Goals**: Inference latency <=2 s per move on CPU; training parity across CPU/GPU; API responses <500 ms for history queries  
-**Constraints**: Strict interface/domain/infrastructure separation; deterministic domain outcomes; explainable logging for inference/training; CLI demos per story  
+**Constraints**: Strict interface/domain/infrastructure separation; deterministic domain outcomes; explainable logging for inference/training; CLI demos per story; decoupled training jobs that publish models for hot-swappable inference  
 **Scale/Scope**: Initial public demo + research stack; supports single-instance deployment with future horizontal scaling
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- **Layering**: Interface changes: new React SPA in `frontend/` consuming Flask endpoints; CLI demos in `scripts/demo/*.sh`. Domain changes: chess rule engine and training orchestration in `src/chessbrain/domain`. Infrastructure changes: Flask controllers, SQLAlchemy repositories, PyTorch device adapters in `src/chessbrain/infrastructure`. Boundaries maintained via explicit service interfaces and DTOs—no cross-layer imports against constitution rules.
+- **Layering**: Interface changes: new React SPA in `frontend/` consuming Flask endpoints; CLI demos in `scripts/demo/*.sh`. Domain changes: chess rule engine and training orchestration in `src/chessbrain/domain`. Infrastructure changes: Flask controllers, SQLAlchemy repositories, PyTorch device adapters, and standalone training runners in `src/chessbrain/infrastructure`. Published model artifacts move across boundaries only via an inference loader contract, keeping training flows outside UI/API pathways. Boundaries maintained via explicit service interfaces and DTOs—no cross-layer imports against constitution rules.
 - **Determinism**: Domain services use `python-chess` and deterministic seeds for move validation and self-play simulations. Training loops separate stochastic exploration (in infrastructure) from domain evaluation to ensure identical inputs yield identical board states.
 - **Demonstration**: Story demos executed via `scripts/demo/play_vs_ai.sh`, `scripts/demo/run_training_cycle.sh`, and `scripts/demo/view_model_history.sh`, each printing structured success logs.
 - **Test-First**: For each story, author failing pytest suites (`tests/contract/test_gameplay.py`, `tests/integration/test_training_control.py`, `tests/integration/test_model_history.py`) plus Playwright UI automation before implementing. CI will run `pytest` and Playwright to enforce coverage.
@@ -93,7 +93,7 @@ tests/
 └── integration/
 ```
 
-**Structure Decision**: Interface code spans `frontend/` (React client) and `src/chessbrain/interface` (CLI + HTTP adapters). Domain logic, including chess rule enforcement and training orchestration contracts, resides in `src/chessbrain/domain`. Infrastructure adapters for Flask APIs, SQLAlchemy repositories, and PyTorch device management live in `src/chessbrain/infrastructure`. Tests mirror this structure under `tests/unit`, `tests/contract`, and `tests/integration`.
+**Structure Decision**: Interface code spans `frontend/` (React client) and `src/chessbrain/interface` (CLI + HTTP adapters). Domain logic, including chess rule enforcement and training orchestration contracts, resides in `src/chessbrain/domain`. Infrastructure adapters for Flask APIs, SQLAlchemy repositories, PyTorch device management, and offline training runners live in `src/chessbrain/infrastructure`, where training outputs publish checkpoints that the inference loader can hot-swap without UI/API coupling. Tests mirror this structure under `tests/unit`, `tests/contract`, and `tests/integration`.
 
 ## Complexity Tracking
 

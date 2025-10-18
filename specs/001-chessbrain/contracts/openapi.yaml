@@ -2,13 +2,12 @@ openapi: 3.1.0
 info:
   title: ChessBrain Platform API
   version: 0.1.0
-  description: REST endpoints for gameplay, training orchestration, and model insights.
+  description: REST endpoints for gameplay, inference management, and model insights. Offline training pipelines integrate by publishing checkpoints and invoking model import/activation endpoints only.
 servers:
   - url: https://localhost:5001/api/v1
     description: Local development (Flask)
 tags:
   - name: Gameplay
-  - name: Training
   - name: Models
 paths:
   /sessions:
@@ -97,74 +96,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Session'
-  /training/jobs:
-    post:
-      tags: [Training]
-      summary: Start a training job
-      operationId: createTrainingJob
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateTrainingJobRequest'
-      responses:
-        '202':
-          description: Job accepted
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TrainingJob'
-  /training/jobs/{jobId}:
-    get:
-      tags: [Training]
-      summary: Retrieve job status and metrics pointers
-      operationId: getTrainingJob
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/JobId'
-      responses:
-        '200':
-          description: Training job
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TrainingJob'
-  /training/jobs/{jobId}/pause:
-    post:
-      tags: [Training]
-      summary: Pause a running training job
-      operationId: pauseTrainingJob
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/JobId'
-      responses:
-        '200':
-          description: Job paused
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TrainingJob'
-  /training/jobs/{jobId}/resume:
-    post:
-      tags: [Training]
-      summary: Resume a paused training job
-      operationId: resumeTrainingJob
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/JobId'
-      responses:
-        '200':
-          description: Job running
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TrainingJob'
   /models:
     get:
       tags: [Models]
@@ -182,6 +113,26 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/ModelVersion'
+  /models/import:
+    post:
+      tags: [Models]
+      summary: Register a new model artifact produced by offline training
+      operationId: importModel
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportModelRequest'
+      responses:
+        '201':
+          description: Model registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelVersion'
   /models/{version}/activate:
     post:
       tags: [Models]
@@ -226,13 +177,6 @@ components:
   parameters:
     SessionId:
       name: sessionId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    JobId:
-      name: jobId
       in: path
       required: true
       schema:
@@ -316,60 +260,27 @@ components:
         timestamp:
           type: string
           format: date-time
-    CreateTrainingJobRequest:
+    ImportModelRequest:
       type: object
-      required: [episodes, batchSize, exploration, devicePreference]
+      required: [version, checkpointPath]
       properties:
-        episodes:
-          type: integer
-          minimum: 1
-        batchSize:
-          type: integer
-          minimum: 1
-        exploration:
-          type: number
-          minimum: 0
-          maximum: 1
-        devicePreference:
+        version:
           type: string
-          enum: [auto, cpu, cuda]
-        seed:
-          type: integer
-        notes:
+          description: Semantic version or timestamp-based identifier for the model checkpoint.
+        checkpointPath:
           type: string
-    TrainingJob:
-      type: object
-      required:
-        - id
-        - status
-        - config
-        - createdAt
-      properties:
-        id:
-          type: string
-          format: uuid
-        status:
-          type: string
-          enum: [queued, running, paused, completed, failed]
-        config:
-          type: object
-          additionalProperties: true
-        checkpointVersion:
-          type: string
+          description: Absolute or storage URI path to the exported `.pt` artifact accessible to the inference service.
         metricsUri:
           type: string
           format: uri
-        episodesPlayed:
-          type: integer
-        lastHeartbeat:
+          description: Optional URI pointing to evaluation metrics captured during training.
+        sourceJobId:
           type: string
-          format: date-time
-        createdAt:
+          format: uuid
+          description: Identifier produced by the offline training pipeline, if available.
+        notes:
           type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
+          description: Free-form notes about the training run or evaluation summary.
     ModelVersion:
       type: object
       required:

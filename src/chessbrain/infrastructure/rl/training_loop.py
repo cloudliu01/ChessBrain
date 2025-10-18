@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
+from src.chessbrain.domain.training.replay_buffer import ReplayBuffer
 from src.chessbrain.domain.training.self_play import SelfPlayCollector
 from src.chessbrain.infrastructure.rl.torch_compat import HAS_TORCH, TORCH
 
@@ -49,12 +50,14 @@ class TrainingLoop:
         *,
         learning_rate: float = 1e-3,
         l2_coefficient: float = 1e-4,
+        replay_buffer: Optional[ReplayBuffer] = None,
     ) -> None:
         self._device = device
         self._model = model
         self._collector = collector
         self._learning_rate = learning_rate
         self._l2_coefficient = l2_coefficient
+        self._replay_buffer = replay_buffer or ReplayBuffer()
         self._optimizer = None
 
         if HAS_TORCH and self._model is None:
@@ -155,8 +158,10 @@ class TrainingLoop:
         for offset in range(episodes_to_run):
             episode_index = start_episode + offset + 1
             episode = self._collector.generate_episode(self._model)
+            self._replay_buffer.add_episode(episode)
 
-            if not episode.samples:
+            samples = self._replay_buffer.sample(config.batch_size)
+            if not samples:
                 metrics.append(
                     EpisodeMetrics(
                         episode_index=episode_index,
@@ -167,20 +172,13 @@ class TrainingLoop:
                 )
                 continue
 
-            features = TORCH.stack([sample.features for sample in episode.samples]).to(self._device)
-            policy_targets = TORCH.stack([sample.policy_target for sample in episode.samples]).to(self._device)
-            legal_masks = TORCH.stack([sample.legal_mask for sample in episode.samples]).to(self._device)
-            value_targets = TORCH.tensor(
-                [sample.value_target for sample in episode.samples],
-                dtype=TORCH.float32,
-                device=self._device,
-            ).unsqueeze(1)
+            batch = self._replay_buffer.as_batch(samples, device=self._device)
 
             self._model.train()
-            output = self._model(features)
-            log_probs = output.log_probs(legal_mask=legal_masks)
-            policy_loss_tensor = -(policy_targets * log_probs).sum(dim=1).mean()
-            value_loss_tensor = TORCH.nn.functional.mse_loss(output.value, value_targets)
+            output = self._model(batch.features)
+            log_probs = output.log_probs(legal_mask=batch.legal_masks)
+            policy_loss_tensor = -(batch.policy_targets * log_probs).sum(dim=1).mean()
+            value_loss_tensor = TORCH.nn.functional.mse_loss(output.value, batch.value_targets)
 
             l2_loss_tensor = TORCH.tensor(0.0, device=self._device)
             if self._l2_coefficient > 0:

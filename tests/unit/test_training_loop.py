@@ -21,7 +21,12 @@ def test_training_loop_emits_metrics_and_checkpoint(tmp_path: Path) -> None:
         from src.chessbrain.domain.training.self_play import SelfPlayCollector
 
         model = AlphaZeroResidualNetwork(residual_blocks=1, channels=64)
-        collector = SelfPlayCollector(device=TORCH.device("cpu"), max_moves=16, exploration_epsilon=0.1)
+        collector = SelfPlayCollector(
+            device=TORCH.device("cpu"),
+            max_moves=8,
+            exploration_epsilon=0.1,
+            mcts_simulations=8,
+        )
     loop = TrainingLoop(device=TORCH.device("cpu"), model=model, collector=collector)
 
     first_batch = loop.run(config=config, start_episode=0, max_episodes=1)

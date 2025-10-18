@@ -25,12 +25,16 @@ from src.chessbrain.infrastructure.rl.training_loop import TrainingConfig, Train
 @click.option("--checkpoint-interval", type=int, default=50, show_default=True)
 @click.option("--exploration-rate", type=float, default=0.1, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
+@click.option("--mcts-simulations", type=int, default=64, show_default=True, help="Number of MCTS rollouts per move.")
+@click.option("--mcts-cpuct", type=float, default=1.5, show_default=True, help="Exploration constant for MCTS.")
 def main(
     episodes: int,
     batch_size: int,
     checkpoint_interval: int,
     exploration_rate: float,
     seed: int,
+    mcts_simulations: int,
+    mcts_cpuct: float,
 ) -> None:
     """Run a self-play training cycle and persist resulting artifacts."""
     config = load_config()
@@ -39,7 +43,13 @@ def main(
 
     device = resolve_device(config)
     model = AlphaZeroResidualNetwork()
-    collector = SelfPlayCollector(device=device, exploration_epsilon=0.1, max_moves=128)
+    collector = SelfPlayCollector(
+        device=device,
+        exploration_epsilon=0.1,
+        max_moves=128,
+        mcts_simulations=mcts_simulations,
+        mcts_c_puct=mcts_cpuct,
+    )
     training_loop = TrainingLoop(device=device, model=model, collector=collector)
     checkpoint_publisher = FileCheckpointPublisher(config.model_checkpoint_dir)
 

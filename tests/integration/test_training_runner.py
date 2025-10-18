@@ -25,7 +25,12 @@ def test_training_job_lifecycle(app_config, db_session) -> None:  # type: ignore
     if HAS_TORCH:
         from src.chessbrain.domain.training.self_play import SelfPlayCollector
 
-        collector = SelfPlayCollector(device=device, max_moves=32, exploration_epsilon=0.1)
+        collector = SelfPlayCollector(
+            device=device,
+            max_moves=16,
+            exploration_epsilon=0.1,
+            mcts_simulations=8,
+        )
     else:
         collector = None
     training_loop = TrainingLoop(device=device, model=model, collector=collector)

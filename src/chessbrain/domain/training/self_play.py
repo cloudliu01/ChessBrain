@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
@@ -16,6 +17,7 @@ from src.chessbrain.domain.models.move_encoding import (
     policy_from_masked_logits,
 )
 from src.chessbrain.domain.training.features import board_to_tensor
+from src.chessbrain.domain.training.mcts import AlphaZeroMCTS
 
 
 TensorLike = Any if torch is None else torch.Tensor
@@ -45,6 +47,8 @@ class SelfPlayCollector:
         temperature: float = 1.0,
         max_moves: int = 160,
         exploration_epsilon: float = 0.0,
+        mcts_simulations: int = 64,
+        mcts_c_puct: float = 1.5,
     ) -> None:
         if torch is None:  # pragma: no cover - enforced by import guards
             raise RuntimeError("PyTorch is required for SelfPlayCollector")
@@ -52,10 +56,21 @@ class SelfPlayCollector:
         self._temperature = temperature
         self._max_moves = max_moves
         self._exploration_epsilon = exploration_epsilon
+        self._mcts_simulations = mcts_simulations
+        self._mcts_c_puct = mcts_c_puct
 
     def generate_episode(self, model: torch.nn.Module) -> SelfPlayEpisode:  # type: ignore[misc]
         board = chess.Board()
         pending: List[tuple[torch.Tensor, torch.Tensor, torch.Tensor, chess.Color]] = []
+        mcts = (
+            AlphaZeroMCTS(
+                device=self._device,
+                simulations=self._mcts_simulations,
+                c_puct=self._mcts_c_puct,
+            )
+            if self._mcts_simulations > 0
+            else None
+        )
 
         with torch.no_grad():
             for _ply in range(self._max_moves):
@@ -65,10 +80,15 @@ class SelfPlayCollector:
                 features = board_to_tensor(board, device=self._device)
                 legal_mask = legal_moves_mask(board, device=self._device)
 
-                output = model.inference(features.unsqueeze(0), temperature=None)
-                logits = output.flatten_policy().squeeze(0)
+                if mcts is not None:
+                    policy = mcts.run(board, model).detach()
+                    if self._temperature != 1.0:
+                        policy = self._apply_temperature(policy, self._temperature)
+                else:
+                    output = model.inference(features.unsqueeze(0), temperature=None)
+                    logits = output.flatten_policy().squeeze(0)
+                    policy = policy_from_masked_logits(logits, legal_mask, temperature=self._temperature)
 
-                policy = policy_from_masked_logits(logits, legal_mask, temperature=self._temperature)
                 policy = self._apply_exploration(policy, legal_mask)
 
                 move_index = torch.multinomial(policy, 1).item()
@@ -123,6 +143,18 @@ class SelfPlayCollector:
         uniform = torch.zeros_like(policy)
         uniform[legal_indices] = 1.0 / legal_indices.numel()
         return (1 - self._exploration_epsilon) * policy + self._exploration_epsilon * uniform
+
+    @staticmethod
+    def _apply_temperature(policy: torch.Tensor, temperature: float) -> torch.Tensor:
+        if temperature <= 0:
+            raise ValueError("Temperature must be positive")
+        if math.isclose(temperature, 1.0):
+            return policy
+        scaled = policy.pow(1.0 / temperature)
+        total = scaled.sum()
+        if total > 0:
+            return scaled / total
+        return policy
 
 
 __all__ = ["SelfPlayCollector", "SelfPlayEpisode", "TrainingSample"]

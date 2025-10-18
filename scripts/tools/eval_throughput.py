@@ -39,7 +39,9 @@ def benchmark(
     for _ in range(warmup_steps):
         loss = _forward_backward(model, optim, x, mask, pi_targets, z_targets)
 
-    torch.cuda.empty_cache() if device.startswith("cuda") else None
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
 
     t0 = time.time()
     for _ in range(iterations):

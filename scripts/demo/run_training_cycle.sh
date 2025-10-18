@@ -14,6 +14,26 @@ python -m src.chessbrain.interface.cli.train \
   --batch-size "${BATCH_SIZE:-16}" \
   --checkpoint-interval "${CHECKPOINT_INTERVAL:-2}" \
   --exploration-rate "${EXPLORATION_RATE:-0.1}" \
-  --seed "${SEED:-7}"
+  --seed "${SEED:-7}" \
+  --mcts-simulations "${MCTS_SIMULATIONS:-32}" \
+  --mcts-cpuct "${MCTS_CPUCT:-1.5}" \
+  | while IFS= read -r line; do
+      echo "$line"
+    done
 
-echo "Training cycle complete. Checkpoints stored in ${MODEL_CHECKPOINT_DIR}."
+LATEST_JOB_DIR=$(find "${TENSORBOARD_LOG_DIR}" -maxdepth 1 -type d -name "[0-9a-f]*" -print | sort | tail -n 1 || true)
+if [[ -n "${LATEST_JOB_DIR}" ]]; then
+  TOTAL_EPISODES="${EPISODES:-4}"
+  LAST_EPISODE=$(jq -r '.["episode_index"]' "${LATEST_JOB_DIR}/metrics.jsonl" 2>/dev/null | tail -n 1 || echo 0)
+  PERCENT=0
+  if [[ "${TOTAL_EPISODES}" -gt 0 ]]; then
+    PERCENT=$(( LAST_EPISODE * 100 / TOTAL_EPISODES ))
+  fi
+  echo "Training progress: ${LAST_EPISODE}/${TOTAL_EPISODES} episodes (${PERCENT}%)."
+  echo "Metrics log: ${LATEST_JOB_DIR}/metrics.jsonl"
+fi
+
+LATEST_CHECKPOINT=$(find "${MODEL_CHECKPOINT_DIR}" -type f -name '*.pt' -print | sort | tail -n 1 || true)
+if [[ -n "${LATEST_CHECKPOINT}" ]]; then
+  echo "Latest checkpoint: ${LATEST_CHECKPOINT}"
+fi

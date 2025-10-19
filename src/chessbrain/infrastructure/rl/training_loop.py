@@ -59,7 +59,7 @@ class TrainingLoop:
         self._collector = collector
         self._learning_rate = learning_rate
         self._l2_coefficient = l2_coefficient
-        self._replay_buffer = replay_buffer or ReplayBuffer()
+        self._replay_buffer = replay_buffer
         self._optimizer = None
         self._grad_accum_steps = max(1, grad_accum_steps)
         self._use_amp = False
@@ -92,6 +92,10 @@ class TrainingLoop:
         episodes_to_run = remaining if max_episodes is None else min(remaining, max_episodes)
         if episodes_to_run <= 0:
             return TrainingLoopResult(episodes_played=0, metrics=[], checkpoint_state=None)
+
+        if self._replay_buffer is None:
+            capacity = max(config.batch_size * 4, config.batch_size)
+            self._replay_buffer = ReplayBuffer(capacity=capacity)
 
         if not self._should_use_self_play():
             return self._run_deterministic(

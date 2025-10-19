@@ -17,7 +17,7 @@ echo "Starting ChessBrain training cycle..."
 cmd=(
   python -m src.chessbrain.interface.cli.train
   --episodes "${EPISODES:-4}"
-  --batch-size "${BATCH_SIZE:-16}"
+  --batch-size "${BATCH_SIZE:-1024}"
   --checkpoint-interval "${CHECKPOINT_INTERVAL:-2}"
   --exploration-rate "${EXPLORATION_RATE:-0.1}"
   --seed "${SEED:-7}"

@@ -88,6 +88,8 @@ def main(
         model=model,
         collector=collector,
         grad_accum_steps=grad_accum_steps,
+        learning_rate=config.training_learning_rate,
+        l2_coefficient=config.training_l2_coefficient,
         use_amp=use_amp,
         micro_batch_size=micro_batch_size,
     )

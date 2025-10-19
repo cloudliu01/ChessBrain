@@ -15,6 +15,8 @@ class AppConfig:
     flask_env: str = "production"
     pytorch_device_preference: str = "auto"
     additional: dict[str, str] = field(default_factory=dict)
+    training_learning_rate: float = 1e-3
+    training_l2_coefficient: float = 1e-4
     active_model_path: Path | None = None
     active_model_version: str | None = None
 
@@ -34,6 +36,18 @@ def load_config(prefix: str = "") -> AppConfig:
     active_model_version = _get_env("ACTIVE_MODEL_VERSION", "") or None
     if not active_model_version and active_model_path is not None:
         active_model_version = active_model_path.stem
+
+    learning_rate_raw = _get_env("TRAINING_LEARNING_RATE", "0.001")
+    l2_raw = _get_env("TRAINING_L2_COEFFICIENT", "0.0001")
+
+    def _parse_float(raw: str, fallback: float) -> float:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return fallback
+
+    training_learning_rate = _parse_float(learning_rate_raw, 0.001)
+    training_l2_coefficient = _parse_float(l2_raw, 0.0001)
 
     additional_keys = (
         "STRUCTLOG_LEVEL",
@@ -55,6 +69,8 @@ def load_config(prefix: str = "") -> AppConfig:
         additional=additional,
         active_model_path=active_model_path,
         active_model_version=active_model_version,
+        training_learning_rate=training_learning_rate,
+        training_l2_coefficient=training_l2_coefficient,
     )
 
 

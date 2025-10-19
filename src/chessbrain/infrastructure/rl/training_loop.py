@@ -197,7 +197,8 @@ class TrainingLoop:
         episodes_to_run: int,
         progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
     ) -> TrainingLoopResult:
-        assert self._collector is not None
+        if self._collector is None and self._producer_pool is None:
+            raise RuntimeError("No episode generator available; provide collector or producer pool")
         assert self._model is not None
         assert self._optimizer is not None
 
@@ -212,8 +213,8 @@ class TrainingLoop:
         for offset in range(episodes_to_run):
             episode_index = start_episode + offset + 1
             episode = self._next_episode()
-            if episode is None:
-                continue
+            while episode is None:
+                episode = self._next_episode()
             self._replay_buffer.add_episode(episode)
 
             samples = self._replay_buffer.sample(config.batch_size)

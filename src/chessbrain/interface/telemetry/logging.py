@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from typing import Any
+import logging
+import sys
+
+try:
+    import structlog
+except ModuleNotFoundError:  # pragma: no cover - fallback for thin environments
+    structlog = None  # type: ignore[assignment]
+
+
+def setup_logging(level: int | str = "INFO") -> None:
+    """Configure structlog for JSON-formatted logging with trace IDs."""
+    logging.basicConfig(
+        format="%(message)s",
+        level=level,
+        stream=sys.stdout,
+    )
+
+    if isinstance(level, str):
+        min_level = logging.getLevelName(level.upper())
+        if not isinstance(min_level, int):
+            min_level = logging.INFO
+    else:
+        min_level = level
+
+    if structlog is None:
+        return
+
+    structlog.configure(  # type: ignore[union-attr]
+        processors=[
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.add_log_level,
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.UnicodeDecoder(),
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(min_level),
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+
+def get_logger(name: str | None = None):
+    """Return a structlog logger bound to the provided name."""
+    if structlog is None:
+        return logging.getLogger(name or "chessbrain")
+    return structlog.get_logger(name or "chessbrain")
+
+
+def bind_trace(logger: Any, trace_id: str | None = None, **kwargs) -> Any:
+    """Attach trace metadata to a logger for request correlation."""
+    context = {"trace_id": trace_id} if trace_id else {}
+    context.update(kwargs)
+    if structlog is None:
+        adapter = logging.LoggerAdapter(logger, extra=context) if isinstance(logger, logging.Logger) else logger
+        if hasattr(adapter, "extra"):
+            adapter.extra.update(context)
+        return adapter
+    return logger.bind(**context)
+
+
+__all__ = ["setup_logging", "get_logger", "bind_trace"]

@@ -80,6 +80,8 @@ Researcher inspects stored games, training metrics, and model versions through t
 - **FR-008**: Observability MUST include TensorBoard metrics and JSON-structured logs streaming inference and training events.
 - **FR-009**: Demo commands (`play_vs_ai.sh`, `run_training_cycle.sh`, `view_model_history.sh`) MUST execute the end-to-end scenarios for each user story.
 - **FR-010**: The system MUST operate on both macOS CPU and NVIDIA GPU hosts without code changes, selecting the device dynamically.
+- **FR-011**: Consider training is a separated flow and no need to be integrated to the front end / API. The model needs to be easily plugged in to the inference interface though.
+- **FR-012**: Thr AI model should be structured & trained similar to AlphaZero
 
 ### Key Entities *(include if feature involves data)*
 

@@ -1,0 +1,320 @@
+openapi: 3.1.0
+info:
+  title: ChessBrain Platform API
+  version: 0.1.0
+  description: REST endpoints for gameplay, inference management, and model insights. Offline training pipelines integrate by publishing checkpoints and invoking model import/activation endpoints only.
+servers:
+  - url: https://localhost:5001/api/v1
+    description: Local development (Flask)
+tags:
+  - name: Gameplay
+  - name: Models
+paths:
+  /sessions:
+    post:
+      tags: [Gameplay]
+      summary: Create a new chess session
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+  /sessions/{sessionId}:
+    get:
+      tags: [Gameplay]
+      summary: Fetch session state
+      operationId: getSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+  /sessions/{sessionId}/moves:
+    post:
+      tags: [Gameplay]
+      summary: Submit a move for the human player and trigger AI response
+      operationId: submitMove
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitMoveRequest'
+      responses:
+        '200':
+          description: Updated session with AI reply move included
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '409':
+          description: Illegal move attempted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainError'
+  /sessions/{sessionId}/undo:
+    post:
+      tags: [Gameplay]
+      summary: Undo last pair of moves
+      operationId: undoMove
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session after undo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+  /sessions/{sessionId}/resign:
+    post:
+      tags: [Gameplay]
+      summary: Resign the current session
+      operationId: resignGame
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Updated session marked as resigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+  /models:
+    get:
+      tags: [Models]
+      summary: List model versions ordered by creation time
+      operationId: listModels
+      responses:
+        '200':
+          description: Model list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModelVersion'
+  /models/import:
+    post:
+      tags: [Models]
+      summary: Register a new model artifact produced by offline training
+      operationId: importModel
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportModelRequest'
+      responses:
+        '201':
+          description: Model registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelVersion'
+  /models/{version}/activate:
+    post:
+      tags: [Models]
+      summary: Promote a model version to active
+      operationId: activateModel
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ModelVersion'
+      responses:
+        '200':
+          description: Updated model state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelVersion'
+  /models/{version}/games:
+    get:
+      tags: [Models]
+      summary: Fetch games played with a given model
+      operationId: getModelGames
+      parameters:
+        - $ref: '#/components/parameters/ModelVersion'
+      responses:
+        '200':
+          description: Game history subset
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Session'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ModelVersion:
+      name: version
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    CreateSessionRequest:
+      type: object
+      required: [playerColor, difficulty]
+      properties:
+        playerColor:
+          type: string
+          enum: [white, black]
+        difficulty:
+          type: string
+          enum: [deterministic, stochastic]
+    SubmitMoveRequest:
+      type: object
+      required: [uci]
+      properties:
+        uci:
+          type: string
+          pattern: '^[a-h][1-8][a-h][1-8][qrbn]?$'
+        clientMoveId:
+          type: string
+    Session:
+      type: object
+      required:
+        - id
+        - status
+        - currentFen
+        - moves
+        - activeModelVersion
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [in_progress, white_won, black_won, drawn, aborted]
+        playerColor:
+          type: string
+          enum: [white, black]
+        currentFen:
+          type: string
+        moves:
+          type: array
+          items:
+            $ref: '#/components/schemas/MoveRecord'
+        activeModelVersion:
+          type: string
+        undoCount:
+          type: integer
+        evaluation:
+          type: number
+        traceId:
+          type: string
+    MoveRecord:
+      type: object
+      required: [san, uci, actor, timestamp]
+      properties:
+        san:
+          type: string
+        uci:
+          type: string
+        actor:
+          type: string
+          enum: [human, ai]
+        evaluation:
+          type: number
+        rationale:
+          type: array
+          items:
+            type: string
+        timestamp:
+          type: string
+          format: date-time
+    ImportModelRequest:
+      type: object
+      required: [version, checkpointPath]
+      properties:
+        version:
+          type: string
+          description: Semantic version or timestamp-based identifier for the model checkpoint.
+        checkpointPath:
+          type: string
+          description: Absolute or storage URI path to the exported `.pt` artifact accessible to the inference service.
+        metricsUri:
+          type: string
+          format: uri
+          description: Optional URI pointing to evaluation metrics captured during training.
+        sourceJobId:
+          type: string
+          format: uuid
+          description: Identifier produced by the offline training pipeline, if available.
+        notes:
+          type: string
+          description: Free-form notes about the training run or evaluation summary.
+    ModelVersion:
+      type: object
+      required:
+        - version
+        - createdAt
+        - checkpointPath
+      properties:
+        version:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        checkpointPath:
+          type: string
+        winRate:
+          type: number
+        policyAccuracy:
+          type: number
+        valueMse:
+          type: number
+        isActive:
+          type: boolean
+        sourceJobId:
+          type: string
+          format: uuid
+        notes:
+          type: string
+    DomainError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        detail:
+          type: object

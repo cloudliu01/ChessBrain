@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 import time
 from pathlib import Path
 from typing import Iterable, Optional, Any, Dict
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except Exception:  # pragma: no cover - optional dependency
+    SummaryWriter = None
 from uuid import UUID, uuid4
 
 import chess
@@ -61,9 +66,16 @@ class SelfPlayOrchestrator:
         if start_episode > 0:
             job = self._repository.record_progress(job_id, start_episode)
 
+        metrics_path = metrics_dir / "metrics.jsonl"
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_file = metrics_path.open("a", encoding="utf-8")
+        metrics_written = False
+        writer = SummaryWriter(str(metrics_dir)) if SummaryWriter is not None else None
+
         start_time = time.time()
 
         def progress(metric, current_episode: int, total_episodes: int) -> None:
+            nonlocal metrics_written
             percent = 0
             if total_episodes > 0:
                 percent = int(current_episode * 100 / total_episodes)
@@ -75,6 +87,22 @@ class SelfPlayOrchestrator:
                 f" elapsed={elapsed:.1f}s",
                 flush=True,
             )
+            record = {
+                "episode_index": current_episode,
+                "total_episodes": total_episodes,
+                "policy_loss": metric.policy_loss,
+                "value_loss": metric.value_loss,
+                "win_rate": metric.win_rate,
+                "elapsed_seconds": elapsed,
+            }
+            metrics_file.write(json.dumps(record) + "\n")
+            metrics_file.flush()
+            metrics_written = True
+            if writer is not None:
+                writer.add_scalar("loss/policy", metric.policy_loss, current_episode)
+                writer.add_scalar("loss/value", metric.value_loss, current_episode)
+                writer.add_scalar("performance/win_rate", metric.win_rate, current_episode)
+                writer.flush()
 
         last_artifact: Optional[CheckpointArtifact] = None
         last_state: Optional[dict[str, Any]] = resume_state.copy() if resume_state else None
@@ -128,7 +156,8 @@ class SelfPlayOrchestrator:
                 else start_episode
             )
             job = self._repository.record_progress(job_id, final_episode)
-            self._write_metrics(metrics_dir, result.metrics)
+            if not metrics_written:
+                self._write_metrics(metrics_dir, result.metrics)
 
             checkpoint_state = result.checkpoint_state or last_state
             if checkpoint_state is None:
@@ -150,6 +179,11 @@ class SelfPlayOrchestrator:
         except Exception as exc:  # pragma: no cover - defensive fallback
             self._repository.set_failed(job_id, str(exc))
             raise
+        finally:
+            metrics_file.close()
+            if writer is not None:
+                writer.flush()
+                writer.close()
 
     def _write_metrics(self, metrics_dir: Path, metrics: Iterable[EpisodeMetrics]) -> None:
         metrics_dir.mkdir(parents=True, exist_ok=True)

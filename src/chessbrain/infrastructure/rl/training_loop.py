@@ -51,6 +51,8 @@ class TrainingLoop:
         learning_rate: float = 1e-3,
         l2_coefficient: float = 1e-4,
         replay_buffer: Optional[ReplayBuffer] = None,
+        grad_accum_steps: int = 1,
+        use_amp: bool = False,
     ) -> None:
         self._device = device
         self._model = model
@@ -59,6 +61,9 @@ class TrainingLoop:
         self._l2_coefficient = l2_coefficient
         self._replay_buffer = replay_buffer or ReplayBuffer()
         self._optimizer = None
+        self._grad_accum_steps = max(1, grad_accum_steps)
+        self._use_amp = False
+        self._scaler = None
 
         if HAS_TORCH and self._model is None:
             self._model = AlphaZeroResidualNetwork().to(self._device)
@@ -68,6 +73,9 @@ class TrainingLoop:
                 self._model.parameters(),
                 lr=self._learning_rate,
             )
+            if use_amp and getattr(self._device, "type", "") == "cuda":
+                self._use_amp = True
+                self._scaler = TORCH.cuda.amp.GradScaler()
 
     def run(
         self,
@@ -170,6 +178,9 @@ class TrainingLoop:
 
         TORCH.manual_seed(config.seed + start_episode)
 
+        self._optimizer.zero_grad(set_to_none=True)
+        accum_counter = 0
+
         for offset in range(episodes_to_run):
             episode_index = start_episode + offset + 1
             episode = self._collector.generate_episode(self._model)
@@ -190,23 +201,48 @@ class TrainingLoop:
             batch = self._replay_buffer.as_batch(samples, device=self._device)
 
             self._model.train()
-            output = self._model(batch.features)
-            log_probs = output.log_probs(legal_mask=batch.legal_masks)
-            policy_loss_tensor = -(batch.policy_targets * log_probs).sum(dim=1).mean()
-            value_loss_tensor = TORCH.nn.functional.mse_loss(output.value, batch.value_targets)
+            if self._use_amp:
+                assert self._scaler is not None
+                with TORCH.cuda.amp.autocast():
+                    output = self._model(batch.features)
+                    log_probs = output.log_probs(legal_mask=batch.legal_masks)
+                    policy_loss_tensor = -(batch.policy_targets * log_probs).sum(dim=1).mean()
+                    value_loss_tensor = TORCH.nn.functional.mse_loss(
+                        output.value, batch.value_targets
+                    )
+                    l2_loss_tensor = self._compute_l2_penalty()
+                    total_loss = policy_loss_tensor + value_loss_tensor + l2_loss_tensor
+                loss = total_loss / self._grad_accum_steps
+                self._scaler.scale(loss).backward()
+            else:
+                output = self._model(batch.features)
+                log_probs = output.log_probs(legal_mask=batch.legal_masks)
+                policy_loss_tensor = -(batch.policy_targets * log_probs).sum(dim=1).mean()
+                value_loss_tensor = TORCH.nn.functional.mse_loss(
+                    output.value, batch.value_targets
+                )
+                l2_loss_tensor = self._compute_l2_penalty()
+                total_loss = policy_loss_tensor + value_loss_tensor + l2_loss_tensor
+                loss = total_loss / self._grad_accum_steps
+                loss.backward()
 
-            l2_loss_tensor = TORCH.tensor(0.0, device=self._device)
-            if self._l2_coefficient > 0:
-                l2_terms = [param.pow(2).sum() for param in self._model.parameters()]
-                if l2_terms:
-                    l2_loss_tensor = TORCH.stack(l2_terms).sum() * self._l2_coefficient
+            accum_counter += 1
+            should_step = (
+                accum_counter % self._grad_accum_steps == 0
+                or offset == episodes_to_run - 1
+            )
 
-            total_loss = policy_loss_tensor + value_loss_tensor + l2_loss_tensor
-
-            self._optimizer.zero_grad()
-            total_loss.backward()
-            TORCH.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=5.0)
-            self._optimizer.step()
+            if should_step:
+                if self._use_amp:
+                    assert self._scaler is not None
+                    self._scaler.unscale_(self._optimizer)
+                TORCH.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=5.0)
+                if self._use_amp:
+                    self._scaler.step(self._optimizer)
+                    self._scaler.update()
+                else:
+                    self._optimizer.step()
+                self._optimizer.zero_grad(set_to_none=True)
 
             metric = EpisodeMetrics(
                 episode_index=episode_index,
@@ -240,6 +276,14 @@ class TrainingLoop:
             metrics=metrics,
             checkpoint_state=checkpoint_state,
         )
+
+    def _compute_l2_penalty(self) -> TORCH.Tensor:
+        if self._l2_coefficient <= 0:
+            return TORCH.tensor(0.0, device=self._device)
+        l2_terms = [param.pow(2).sum() for param in self._model.parameters()]
+        if not l2_terms:
+            return TORCH.tensor(0.0, device=self._device)
+        return TORCH.stack(l2_terms).sum() * self._l2_coefficient
 
 
 __all__ = [

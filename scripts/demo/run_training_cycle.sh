@@ -8,18 +8,31 @@ export DATABASE_URL="${DATABASE_URL:-sqlite+pysqlite:///$REPO_ROOT/.chessbrain-t
 export MODEL_CHECKPOINT_DIR="${MODEL_CHECKPOINT_DIR:-$REPO_ROOT/models/checkpoints}"
 export TENSORBOARD_LOG_DIR="${TENSORBOARD_LOG_DIR:-$REPO_ROOT/data/tensorboard}"
 
+AMP_FLAG=""
+if [[ "${NO_AMP:-0}" == "1" ]]; then
+  AMP_FLAG="--no-amp"
+fi
+
 echo "Starting ChessBrain training cycle..."
-python -m src.chessbrain.interface.cli.train \
-  --episodes "${EPISODES:-4}" \
-  --batch-size "${BATCH_SIZE:-16}" \
-  --checkpoint-interval "${CHECKPOINT_INTERVAL:-2}" \
-  --exploration-rate "${EXPLORATION_RATE:-0.1}" \
-  --seed "${SEED:-7}" \
-  --mcts-simulations "${MCTS_SIMULATIONS:-32}" \
-  --mcts-cpuct "${MCTS_CPUCT:-1.5}" \
-  | while IFS= read -r line; do
-      echo "$line"
-    done
+cmd=(
+  python -m src.chessbrain.interface.cli.train
+  --episodes "${EPISODES:-4}"
+  --batch-size "${BATCH_SIZE:-16}"
+  --checkpoint-interval "${CHECKPOINT_INTERVAL:-2}"
+  --exploration-rate "${EXPLORATION_RATE:-0.1}"
+  --seed "${SEED:-7}"
+  --grad-accum-steps "${GRAD_ACCUM_STEPS:-1}"
+  --mcts-simulations "${MCTS_SIMULATIONS:-32}"
+  --mcts-cpuct "${MCTS_CPUCT:-1.5}"
+)
+
+if [[ -n "${AMP_FLAG}" ]]; then
+  cmd+=("${AMP_FLAG}")
+fi
+
+"${cmd[@]}" | while IFS= read -r line; do
+  echo "$line"
+done
 
 LATEST_JOB_DIR=$(find "${TENSORBOARD_LOG_DIR}" -maxdepth 1 -type d -name "[0-9a-f]*" -print | sort | tail -n 1 || true)
 if [[ -n "${LATEST_JOB_DIR}" ]]; then

@@ -25,6 +25,8 @@ from src.chessbrain.infrastructure.rl.training_loop import TrainingConfig, Train
 @click.option("--checkpoint-interval", type=int, default=50, show_default=True)
 @click.option("--exploration-rate", type=float, default=0.1, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
+@click.option("--grad-accum-steps", type=int, default=1, show_default=True)
+@click.option("--no-amp", is_flag=True, help="Disable automatic mixed precision (CUDA only).")
 @click.option("--mcts-simulations", type=int, default=64, show_default=True, help="Number of MCTS rollouts per move.")
 @click.option("--mcts-cpuct", type=float, default=1.5, show_default=True, help="Exploration constant for MCTS.")
 def main(
@@ -33,6 +35,8 @@ def main(
     checkpoint_interval: int,
     exploration_rate: float,
     seed: int,
+    grad_accum_steps: int,
+    no_amp: bool,
     mcts_simulations: int,
     mcts_cpuct: float,
 ) -> None:
@@ -43,6 +47,8 @@ def main(
 
     device = resolve_device(config)
     model = AlphaZeroResidualNetwork()
+    use_amp = (getattr(device, "type", "") == "cuda") and not no_amp
+
     collector = SelfPlayCollector(
         device=device,
         exploration_epsilon=0.1,
@@ -50,7 +56,13 @@ def main(
         mcts_simulations=mcts_simulations,
         mcts_c_puct=mcts_cpuct,
     )
-    training_loop = TrainingLoop(device=device, model=model, collector=collector)
+    training_loop = TrainingLoop(
+        device=device,
+        model=model,
+        collector=collector,
+        grad_accum_steps=grad_accum_steps,
+        use_amp=use_amp,
+    )
     checkpoint_publisher = FileCheckpointPublisher(config.model_checkpoint_dir)
 
     run_config = TrainingConfig(

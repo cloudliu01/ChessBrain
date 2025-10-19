@@ -89,6 +89,13 @@ flowchart LR
 - Every run writes JSON lines (`metrics.jsonl`) under `TENSORBOARD_LOG_DIR/<job-id>/` for quick jq-based progress queries.
 - Checkpoints are versioned by job + global step (`<job>_stepXXXX.pt`) and sent to model registration.
 
+### Episode Metrics Schema
+
+- `episode_index`: 1-based counter for completed self-play games.
+- `policy_loss`: Cross-entropy loss between the policy head and the MCTS-improved target distribution aggregated over the episode.
+- `value_loss`: Mean-squared error on the scalar value head against the Monte Carlo game outcome.
+- `win_rate`: Normalized outcome of the self-play game from White's perspective (`1.0` for a White win, `0.0` for a Black win, `0.5` for a draw). This matches the value head target and is a quick signal for how decisively the latest self-play sample concluded.
+
 ## 5. Current Bottlenecks & Opportunities
 
 | Area | Observation | Potential Improvements |

@@ -61,6 +61,9 @@ class PolicyValueOutput(NamedTuple):
         else:
             masked_logits = logits
         log_probs = F.log_softmax(masked_logits, dim=-1)
+        if orig_dtype in (torch.float16, torch.bfloat16):
+            # Keep higher precision to avoid overflow/NaNs when mixed precision is enabled.
+            return log_probs
         return log_probs.to(orig_dtype)
 
 

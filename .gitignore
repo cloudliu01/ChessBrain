@@ -1,6 +1,7 @@
 ChessBrain/.codex
 */__pycache__/*
-venv312
+venv31*
 *pyc
 *.DS_Store
 tests/.artifacts
+venv310/bin/activate.fish

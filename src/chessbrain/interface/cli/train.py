@@ -29,6 +29,9 @@ from src.chessbrain.infrastructure.rl.training_loop import TrainingConfig, Train
 @click.option("--no-amp", is_flag=True, help="Disable automatic mixed precision (CUDA only).")
 @click.option("--mcts-simulations", type=int, default=64, show_default=True, help="Number of MCTS rollouts per move.")
 @click.option("--mcts-cpuct", type=float, default=1.5, show_default=True, help="Exploration constant for MCTS.")
+@click.option("--producer-workers", type=int, default=0, show_default=True, help="Spawn N parallel episode producers (CPU).")
+@click.option("--producer-queue-size", type=int, default=16, show_default=True)
+@click.option("--producer-device", default="cpu", show_default=True)
 def main(
     episodes: int,
     batch_size: int,
@@ -39,6 +42,9 @@ def main(
     no_amp: bool,
     mcts_simulations: int,
     mcts_cpuct: float,
+    producer_workers: int,
+    producer_queue_size: int,
+    producer_device: str,
 ) -> None:
     """Run a self-play training cycle and persist resulting artifacts."""
     config = load_config()
@@ -49,19 +55,27 @@ def main(
     model = AlphaZeroResidualNetwork()
     use_amp = (getattr(device, "type", "") == "cuda") and not no_amp
 
-    collector = SelfPlayCollector(
-        device=device,
-        exploration_epsilon=0.1,
-        max_moves=128,
-        mcts_simulations=mcts_simulations,
-        mcts_c_puct=mcts_cpuct,
-    )
+    collector_config = {
+        "temperature": 1.0,
+        "exploration_epsilon": exploration_rate,
+        "max_moves": 128,
+        "mcts_simulations": mcts_simulations,
+        "mcts_c_puct": mcts_cpuct,
+    }
+
+    collector = None
+    if producer_workers == 0:
+        collector = SelfPlayCollector(device=device, **collector_config)
     training_loop = TrainingLoop(
         device=device,
         model=model,
         collector=collector,
         grad_accum_steps=grad_accum_steps,
         use_amp=use_amp,
+        collector_config=collector_config,
+        producer_workers=producer_workers,
+        producer_queue_size=producer_queue_size,
+        producer_device=producer_device,
     )
     checkpoint_publisher = FileCheckpointPublisher(config.model_checkpoint_dir)
 

@@ -95,6 +95,8 @@ class SelfPlayOrchestrator:
         except Exception as exc:  # pragma: no cover - defensive fallback
             self._repository.set_failed(job_id, str(exc))
             raise
+        finally:
+            self._training_loop.shutdown()
 
     def _write_metrics(self, metrics_dir: Path, metrics: Iterable[EpisodeMetrics]) -> None:
         metrics_dir.mkdir(parents=True, exist_ok=True)

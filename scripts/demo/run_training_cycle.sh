@@ -24,6 +24,9 @@ cmd=(
   --grad-accum-steps "${GRAD_ACCUM_STEPS:-1}"
   --mcts-simulations "${MCTS_SIMULATIONS:-32}"
   --mcts-cpuct "${MCTS_CPUCT:-1.5}"
+  --producer-workers "${PRODUCER_WORKERS:-0}"
+  --producer-queue-size "${PRODUCER_QUEUE_SIZE:-16}"
+  --producer-device "${PRODUCER_DEVICE:-cpu}"
 )
 
 if [[ -n "${AMP_FLAG}" ]]; then

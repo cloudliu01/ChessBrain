@@ -99,6 +99,15 @@ class SelfPlayCollector:
 
                 policy = self._apply_exploration(policy, legal_mask)
 
+                total_mass = policy.sum()
+                if not torch.isfinite(total_mass) or total_mass <= 0:
+                    legal_indices = legal_mask.nonzero(as_tuple=False).squeeze(-1)
+                    policy = torch.zeros_like(policy)
+                    if legal_indices.numel() > 0:
+                        policy[legal_indices] = 1.0 / legal_indices.numel()
+                    else:
+                        policy.fill_(1.0 / policy.numel())
+
                 move_index = torch.multinomial(policy, 1).item()
                 move = decode_index(board, move_index)
                 if move is None:
@@ -110,6 +119,12 @@ class SelfPlayCollector:
                     policy = torch.zeros_like(policy)
                     if fallback_index is not None:
                         policy[fallback_index] = 1.0
+                    else:
+                        legal_indices = legal_mask.nonzero(as_tuple=False).squeeze(-1)
+                        if legal_indices.numel() > 0:
+                            policy[legal_indices] = 1.0 / legal_indices.numel()
+                        else:
+                            policy.fill_(1.0 / policy.numel())
 
                 san = board.san(move)
                 moves.append(move.uci())

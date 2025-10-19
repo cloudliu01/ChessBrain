@@ -207,6 +207,12 @@ class TrainingLoop:
                 with TORCH.no_grad():
                     features = TORCH.stack([sample.features for sample in episode.samples]).to(self._device)
                     policy_targets = TORCH.stack([sample.policy_target for sample in episode.samples]).to(self._device)
+                    policy_sum = policy_targets.sum(dim=1, keepdim=True)
+                    safe_targets = TORCH.where(
+                        policy_sum > 0,
+                        policy_targets / policy_sum,
+                        TORCH.full_like(policy_targets, 1.0 / policy_targets.size(1)),
+                    )
                     legal_masks = TORCH.stack([sample.legal_mask for sample in episode.samples]).to(self._device)
                     value_targets = TORCH.tensor(
                         [sample.value_target for sample in episode.samples],
@@ -215,7 +221,7 @@ class TrainingLoop:
                     ).unsqueeze(1)
                     outputs = self._model(features)
                     episode_log_probs = outputs.log_probs(legal_mask=legal_masks)
-                    ep_policy_loss = -(policy_targets * episode_log_probs).sum(dim=1).mean().item()
+                    ep_policy_loss = -(safe_targets * episode_log_probs).sum(dim=1).mean().item()
                     ep_value_loss = TORCH.nn.functional.mse_loss(outputs.value, value_targets).item()
                     episode_stats = {
                         "policy_loss": float(ep_policy_loss),
@@ -240,13 +246,21 @@ class TrainingLoop:
 
             batch = self._replay_buffer.as_batch(samples, device=self._device)
 
+            policy_targets = batch.policy_targets
+            policy_sum = policy_targets.sum(dim=1, keepdim=True)
+            safe_policy_targets = TORCH.where(
+                policy_sum > 0,
+                policy_targets / policy_sum,
+                TORCH.full_like(policy_targets, 1.0 / policy_targets.size(1)),
+            )
+
             self._model.train()
             if self._use_amp:
                 assert self._scaler is not None
                 with TORCH.cuda.amp.autocast():
                     output = self._model(batch.features)
                     log_probs = output.log_probs(legal_mask=batch.legal_masks)
-                    policy_loss_tensor = -(batch.policy_targets * log_probs).sum(dim=1).mean()
+                    policy_loss_tensor = -(safe_policy_targets * log_probs).sum(dim=1).mean()
                     value_loss_tensor = TORCH.nn.functional.mse_loss(
                         output.value, batch.value_targets
                     )
@@ -257,7 +271,7 @@ class TrainingLoop:
             else:
                 output = self._model(batch.features)
                 log_probs = output.log_probs(legal_mask=batch.legal_masks)
-                policy_loss_tensor = -(batch.policy_targets * log_probs).sum(dim=1).mean()
+                policy_loss_tensor = -(safe_policy_targets * log_probs).sum(dim=1).mean()
                 value_loss_tensor = TORCH.nn.functional.mse_loss(
                     output.value, batch.value_targets
                 )

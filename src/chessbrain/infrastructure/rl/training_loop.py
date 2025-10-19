@@ -236,14 +236,15 @@ class TrainingLoop:
 
             samples = self._replay_buffer.sample(config.batch_size)
             if not samples:
-                metrics.append(
-                    EpisodeMetrics(
-                        episode_index=episode_index,
-                        policy_loss=0.0,
-                        value_loss=0.0,
-                        win_rate=episode.win_rate,
-                    )
+                metric = EpisodeMetrics(
+                    episode_index=episode_index,
+                    policy_loss=0.0,
+                    value_loss=0.0,
+                    win_rate=episode.win_rate,
                 )
+                metrics.append(metric)
+                if progress_callback is not None:
+                    progress_callback(metric, episode_index, config.total_episodes)
                 continue
 
             batch = self._replay_buffer.as_batch(samples, device=self._device)

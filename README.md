@@ -36,17 +36,42 @@ DATABASE_URL=sqlite+pysqlite:///$(pwd)/.chessbrain-training.sqlite \
 ./scripts/demo/run_training_cycle.sh
 
 ## How to run with checkpoint
-  1. Initial run (writes checkpoints to MODEL_CHECKPOINT_DIR and metrics to TENSORBOARD_LOG_DIR):
+  1. Initial run (writes checkpoints to `MODEL_CHECKPOINT_DIR` and metrics to `TENSORBOARD_LOG_DIR`). The checkpoint now captures:
+     - `model_state_dict`
+     - `optimizer_state_dict` (Adam or whichever optimizer is active)
+     - `scaler_state_dict` (when AMP is enabled)
+     - `replay_buffer_state` (all stored self-play samples)
 
-  2. Resume from the latest checkpoint and add 20 more episodes:
+     Example:
+     ```bash
+     DATABASE_URL=sqlite+pysqlite:///$(pwd)/.chessbrain-training.sqlite \
+     MODEL_CHECKPOINT_DIR=$(pwd)/models/checkpoints \
+     TENSORBOARD_LOG_DIR=$(pwd)/tb_logs \
+     python -m src.chessbrain.interface.cli.train \
+       --episodes 200 \
+       --batch-size 16384 \
+       --checkpoint-interval 50 \
+       --grad-accum-steps 4 \
+       --mcts-simulations 64
+     ```
+
+  2. Resume from the latest checkpoint and add 20 more episodes. Pass the checkpoint path via `--resume-checkpoint` (or the `RESUME_CHECKPOINT` env var when using the helper script) and keep training hyper-parameters aligned with the original run so the restored optimizer and replay buffer continue seamlessly:
+     ```bash
      RESUME_CHECKPOINT=models/checkpoints/<your-checkpoint>.pt \
      EPISODES=20 ./scripts/demo/run_training_cycle.sh
-     (Or use the raw CLI: python -m src.chessbrain.interface.cli.train ... --resume-checkpoint path.pt.)
+     # Or directly:
+     python -m src.chessbrain.interface.cli.train \
+       --episodes 20 \
+       --resume-checkpoint models/checkpoints/<your-checkpoint>.pt \
+       --batch-size 16384 \
+       --grad-accum-steps 4 \
+       --mcts-simulations 64
+     ```
 
   3. Inspect progress live with TensorBoard:
      tensorboard --logdir ${TENSORBOARD_LOG_DIR:-data/tensorboard}
 
-  4. Review exported games in TENSORBOARD_LOG_DIR/<job-id>/games/—worst_loss_step_*.pgn for the toughest cases and checkmate_step_*.pgn for decisive finishes.
+  4. Review exported games in `TENSORBOARD_LOG_DIR/<job-id>/games/`—`worst_loss_step_*.pgn` for the toughest cases and `checkmate_step_*.pgn` for decisive finishes.
 
 ## How to view the tensorboard 
 tensorboard --logdir ./tb_logs --port 6006

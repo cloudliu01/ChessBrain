@@ -212,13 +212,8 @@ class TrainingLoop:
                 with TORCH.no_grad():
                     features = TORCH.stack([sample.features for sample in episode.samples]).to(self._device)
                     policy_targets = TORCH.stack([sample.policy_target for sample in episode.samples]).to(self._device)
-                    policy_sum = policy_targets.sum(dim=1, keepdim=True)
-                    safe_targets = TORCH.where(
-                        policy_sum > 0,
-                        policy_targets / policy_sum,
-                        TORCH.full_like(policy_targets, 1.0 / policy_targets.size(1)),
-                    )
                     legal_masks = TORCH.stack([sample.legal_mask for sample in episode.samples]).to(self._device)
+                    safe_targets = self._normalize_targets(policy_targets, legal_masks)
                     value_targets = TORCH.tensor(
                         [sample.value_target for sample in episode.samples],
                         dtype=TORCH.float32,
@@ -251,13 +246,7 @@ class TrainingLoop:
 
             batch = self._replay_buffer.as_batch(samples, device=self._device)
 
-            policy_targets = batch.policy_targets
-            policy_sum = policy_targets.sum(dim=1, keepdim=True)
-            safe_policy_targets = TORCH.where(
-                policy_sum > 0,
-                policy_targets / policy_sum,
-                TORCH.full_like(policy_targets, 1.0 / policy_targets.size(1)),
-            )
+            safe_policy_targets = self._normalize_targets(batch.policy_targets, batch.legal_masks)
 
             self._model.train()
             if self._use_amp:
@@ -341,6 +330,24 @@ class TrainingLoop:
             metrics=metrics,
             checkpoint_state=last_checkpoint_state,
         )
+
+    @staticmethod
+    def _normalize_targets(targets: TORCH.Tensor, masks: TORCH.Tensor) -> TORCH.Tensor:
+        masked = targets * masks
+        sums = masked.sum(dim=1, keepdim=True)
+        legal_counts = masks.sum(dim=1, keepdim=True)
+        legal_counts = TORCH.clamp(legal_counts, min=1.0)
+        uniform = TORCH.where(
+            masks > 0,
+            masks / legal_counts,
+            TORCH.zeros_like(masks),
+        )
+        normalized = TORCH.where(
+            sums > 0,
+            masked / TORCH.clamp(sums, min=1e-8),
+            uniform,
+        )
+        return normalized
 
     def _compute_l2_penalty(self) -> TORCH.Tensor:
         if self._l2_coefficient <= 0:

@@ -98,15 +98,7 @@ class SelfPlayCollector:
                     policy = policy_from_masked_logits(logits, legal_mask, temperature=self._temperature)
 
                 policy = self._apply_exploration(policy, legal_mask)
-
-                total_mass = policy.sum()
-                if not torch.isfinite(total_mass) or total_mass <= 0:
-                    legal_indices = legal_mask.nonzero(as_tuple=False).squeeze(-1)
-                    policy = torch.zeros_like(policy)
-                    if legal_indices.numel() > 0:
-                        policy[legal_indices] = 1.0 / legal_indices.numel()
-                    else:
-                        policy.fill_(1.0 / policy.numel())
+                policy = self._normalize_policy(policy, legal_mask)
 
                 move_index = torch.multinomial(policy, 1).item()
                 move = decode_index(board, move_index)
@@ -125,6 +117,7 @@ class SelfPlayCollector:
                             policy[legal_indices] = 1.0 / legal_indices.numel()
                         else:
                             policy.fill_(1.0 / policy.numel())
+                    policy = self._normalize_policy(policy, legal_mask)
 
                 san = board.san(move)
                 moves.append(move.uci())
@@ -197,6 +190,19 @@ class SelfPlayCollector:
         if total > 0:
             return scaled / total
         return policy
+
+    @staticmethod
+    def _normalize_policy(policy: torch.Tensor, legal_mask: torch.Tensor) -> torch.Tensor:
+        masked = policy * legal_mask
+        total = masked.sum()
+        if torch.isfinite(total) and total > 0:
+            return masked / total
+        legal_indices = legal_mask.nonzero(as_tuple=False).squeeze(-1)
+        if legal_indices.numel() > 0:
+            normalized = torch.zeros_like(policy)
+            normalized[legal_indices] = 1.0 / legal_indices.numel()
+            return normalized
+        return torch.full_like(policy, 1.0 / policy.numel())
 
 
 __all__ = ["SelfPlayCollector", "SelfPlayEpisode", "TrainingSample"]

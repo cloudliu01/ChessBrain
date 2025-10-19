@@ -51,11 +51,14 @@ class PolicyValueOutput(NamedTuple):
             raise RuntimeError("PyTorch is required to compute log probabilities.")
         logits = self.flatten_policy()
         if legal_mask is not None:
-            # Ensure boolean mask for stable masking; illegal -> -inf
             if legal_mask.dtype != torch.bool:
                 legal_mask = legal_mask > 0
-            logits = logits.masked_fill(~legal_mask, float("-inf"))
-        return F.log_softmax(logits, dim=-1)
+            masked_logits = logits.masked_fill(~legal_mask, -1e9)
+            valid = masked_logits.isfinite().any(dim=1, keepdim=True)
+            masked_logits = torch.where(valid, masked_logits, torch.zeros_like(masked_logits))
+        else:
+            masked_logits = logits
+        return F.log_softmax(masked_logits, dim=-1)
 
 
 @dataclass(frozen=True)

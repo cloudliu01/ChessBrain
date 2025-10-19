@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
@@ -83,6 +84,8 @@ class TrainingLoop:
         start_episode: int,
         max_episodes: Optional[int] = None,
         progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
+        checkpoint_interval: Optional[int] = None,
+        on_checkpoint: Optional[Callable[[int, dict[str, Any]], None]] = None,
     ) -> TrainingLoopResult:
         """Execute a bounded number of episodes starting from `start_episode`."""
         if start_episode >= config.total_episodes:
@@ -110,6 +113,8 @@ class TrainingLoop:
             start_episode,
             episodes_to_run,
             progress_callback,
+            checkpoint_interval,
+            on_checkpoint,
         )
 
     def attach_collector(self, collector: SelfPlayCollector) -> None:
@@ -172,6 +177,8 @@ class TrainingLoop:
         start_episode: int,
         episodes_to_run: int,
         progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
+        checkpoint_interval: Optional[int] = None,
+        on_checkpoint: Optional[Callable[[int, dict[str, Any]], None]] = None,
     ) -> TrainingLoopResult:
         assert self._collector is not None
         assert self._model is not None
@@ -184,6 +191,8 @@ class TrainingLoop:
 
         self._optimizer.zero_grad(set_to_none=True)
         accum_counter = 0
+        last_checkpoint_state: Optional[dict[str, Any]] = None
+        effective_interval = checkpoint_interval or config.checkpoint_interval
 
         for offset in range(episodes_to_run):
             episode_index = start_episode + offset + 1
@@ -259,12 +268,14 @@ class TrainingLoop:
             if progress_callback is not None:
                 progress_callback(metric, episode_index, config.total_episodes)
 
-            should_checkpoint = (
-                episode_index == config.total_episodes
-                or episode_index % max(1, config.checkpoint_interval) == 0
-            )
+            emit_checkpoint = False
+            if effective_interval:
+                if episode_index % effective_interval == 0:
+                    emit_checkpoint = True
+            if episode_index == config.total_episodes:
+                emit_checkpoint = True
 
-            if should_checkpoint:
+            if emit_checkpoint:
                 checkpoint_state = {
                     "global_step": episode_index,
                     "device": self._device.type,
@@ -273,12 +284,16 @@ class TrainingLoop:
                         key: value.detach().cpu()
                         for key, value in self._model.state_dict().items()
                     },
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 }
+                last_checkpoint_state = checkpoint_state
+                if on_checkpoint is not None:
+                    on_checkpoint(episode_index, dict(checkpoint_state))
 
         return TrainingLoopResult(
             episodes_played=episodes_to_run,
             metrics=metrics,
-            checkpoint_state=checkpoint_state,
+            checkpoint_state=last_checkpoint_state,
         )
 
     def _compute_l2_penalty(self) -> TORCH.Tensor:

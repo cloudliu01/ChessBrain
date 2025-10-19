@@ -5,7 +5,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional, Any
 from uuid import UUID, uuid4
 
 from src.chessbrain.infrastructure.persistence.training_job_repository import (
@@ -65,19 +65,30 @@ class SelfPlayOrchestrator:
                 flush=True,
             )
 
+        last_artifact: Optional[CheckpointArtifact] = None
+        last_state: Optional[dict[str, Any]] = None
+
+        def on_checkpoint(step: int, state: dict[str, Any]) -> None:
+            nonlocal last_artifact, last_state
+            last_artifact = self._checkpoint_publisher.publish(job_id, state)
+            last_state = state
+
         try:
+            checkpoint_every = max(1, config.total_episodes // 10)
             result = self._training_loop.run(
                 config=config,
                 start_episode=job.episodes_played,
                 max_episodes=config.total_episodes,
                 progress_callback=progress,
+                checkpoint_interval=checkpoint_every,
+                on_checkpoint=on_checkpoint,
             )
 
             episodes_played = job.episodes_played + result.episodes_played
             job = self._repository.record_progress(job_id, episodes_played)
             self._write_metrics(metrics_dir, result.metrics)
 
-            checkpoint_state = result.checkpoint_state
+            checkpoint_state = result.checkpoint_state or last_state
             if checkpoint_state is None:
                 last_episode = result.metrics[-1].episode_index if result.metrics else episodes_played
                 checkpoint_state = {
@@ -85,7 +96,9 @@ class SelfPlayOrchestrator:
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-            artifact = self._checkpoint_publisher.publish(job_id, checkpoint_state)
+            if last_artifact is None:
+                last_artifact = self._checkpoint_publisher.publish(job_id, checkpoint_state)
+            artifact = last_artifact
             job = self._repository.mark_completed(
                 job_id=job_id,
                 checkpoint_version=artifact.version,

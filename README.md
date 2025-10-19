@@ -30,7 +30,8 @@ ChessBrain is a modular chess experimentation platform built around the principl
 
 ## How to run 
 * NVidia 1080Ti 
-GRAD_ACCUM_STEPS=4  EPISODES=200 MCTS_SIMULATIONS=64 BATCH_SIZE=2048 TENSORBOARD_LOG_DIR=./tb_logs \
+GRAD_ACCUM_STEPS=4  EPISODES=200 MCTS_SIMULATIONS=64 BATCH_SIZE=16384 \
+MICRO_BATCH_SIZE=2048 TENSORBOARD_LOG_DIR=./tb_logs \
 DATABASE_URL=sqlite+pysqlite:///$(pwd)/.chessbrain-training.sqlite \
 ./scripts/demo/run_training_cycle.sh
 

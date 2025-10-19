@@ -38,6 +38,12 @@ from src.chessbrain.infrastructure.rl.training_loop import TrainingConfig, Train
     default=None,
     help="Resume from an existing checkpoint and run additional episodes.",
 )
+@click.option(
+    "--micro-batch-size",
+    type=int,
+    default=None,
+    help="Maximum number of samples per GPU micro-batch (defaults to full batch).",
+)
 def main(
     episodes: int,
     batch_size: int,
@@ -49,6 +55,7 @@ def main(
     mcts_simulations: int,
     mcts_cpuct: float,
     resume_checkpoint: Path | None,
+    micro_batch_size: int | None,
 ) -> None:
     """Run a self-play training cycle and persist resulting artifacts."""
     config = load_config()
@@ -85,6 +92,7 @@ def main(
         collector=collector,
         grad_accum_steps=grad_accum_steps,
         use_amp=use_amp,
+        micro_batch_size=micro_batch_size,
     )
     checkpoint_publisher = FileCheckpointPublisher(config.model_checkpoint_dir)
 

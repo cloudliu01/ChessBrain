@@ -34,6 +34,10 @@ if [[ -n "${RESUME_CHECKPOINT:-}" ]]; then
   cmd+=("--resume-checkpoint" "${RESUME_CHECKPOINT}")
 fi
 
+if [[ -n "${MICRO_BATCH_SIZE:-}" ]]; then
+  cmd+=("--micro-batch-size" "${MICRO_BATCH_SIZE}")
+fi
+
 "${cmd[@]}" | while IFS= read -r line; do
   echo "$line"
 done

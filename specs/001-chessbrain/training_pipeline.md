@@ -110,6 +110,7 @@ Keeping this map in sync with the codebase makes it easier to reason about perfo
 | `--exploration-rate` | `0.1` | ε value for epsilon-greedy mixing after MCTS to ensure diverse move selection. |
 | `--seed` | `7` | Global seed for deterministic replay sampling and self-play initialization. Useful for reproducible profiling. |
 | `--grad-accum-steps` | `1` | Number of micro-batches to accumulate before stepping the optimizer. Increases effective batch size without extra memory (especially on 1080 Ti). |
+| `--micro-batch-size` | `None` | Optional cap on GPU micro-batch size; splits large batches into chunks to control memory use. |
 | `--mcts-simulations` | `32` | Number of rollouts per move in `AlphaZeroMCTS`. Dominates CPU time; reduce for speed, raise for stronger policy targets. |
 | `--mcts-cpuct` | `1.5` | Exploration constant balancing prior vs. value during MCTS selection. Tune alongside simulation count. |
 | `--resume-checkpoint` | `None` | Path to an existing `.pt` checkpoint; loads weights, continues from the stored `global_step`, and runs additional episodes. |

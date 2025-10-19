@@ -59,6 +59,7 @@ class TrainingLoop:
         replay_buffer: Optional[ReplayBuffer] = None,
         grad_accum_steps: int = 1,
         use_amp: bool = False,
+        micro_batch_size: Optional[int] = None,
     ) -> None:
         self._device = device
         self._model = model
@@ -70,6 +71,7 @@ class TrainingLoop:
         self._grad_accum_steps = max(1, grad_accum_steps)
         self._use_amp = False
         self._scaler = None
+        self._micro_batch_size = micro_batch_size
 
         if HAS_TORCH and self._model is None:
             self._model = AlphaZeroResidualNetwork().to(self._device)
@@ -249,30 +251,59 @@ class TrainingLoop:
             safe_policy_targets = self._normalize_targets(batch.policy_targets, batch.legal_masks)
 
             self._model.train()
+            total_examples = batch.features.size(0)
+            micro_size = self._micro_batch_size or total_examples
+            micro_size = max(1, min(micro_size, total_examples))
+
+            policy_loss_accum = 0.0
+            value_loss_accum = 0.0
+
+            for start in range(0, total_examples, micro_size):
+                end = min(start + micro_size, total_examples)
+                fraction = (end - start) / total_examples
+                features_chunk = batch.features[start:end]
+                targets_chunk = safe_policy_targets[start:end]
+                masks_chunk = batch.legal_masks[start:end]
+                values_chunk = batch.value_targets[start:end]
+
+                if self._use_amp:
+                    assert self._scaler is not None
+                    with TORCH.cuda.amp.autocast():
+                        output = self._model(features_chunk)
+                        log_probs = output.log_probs(legal_mask=masks_chunk)
+                        chunk_policy_loss = -(targets_chunk * log_probs).sum(dim=1).mean()
+                        chunk_value_loss = TORCH.nn.functional.mse_loss(
+                            output.value, values_chunk
+                        )
+                        chunk_loss = chunk_policy_loss + chunk_value_loss
+                    self._scaler.scale(chunk_loss * fraction / self._grad_accum_steps).backward()
+                else:
+                    output = self._model(features_chunk)
+                    log_probs = output.log_probs(legal_mask=masks_chunk)
+                    chunk_policy_loss = -(targets_chunk * log_probs).sum(dim=1).mean()
+                    chunk_value_loss = TORCH.nn.functional.mse_loss(
+                        output.value, values_chunk
+                    )
+                    chunk_loss = chunk_policy_loss + chunk_value_loss
+                    (chunk_loss * fraction / self._grad_accum_steps).backward()
+
+                policy_loss_accum += chunk_policy_loss.detach().item() * (end - start)
+                value_loss_accum += chunk_value_loss.detach().item() * (end - start)
+
+            l2_loss_tensor = self._compute_l2_penalty()
             if self._use_amp:
                 assert self._scaler is not None
-                with TORCH.cuda.amp.autocast():
-                    output = self._model(batch.features)
-                    log_probs = output.log_probs(legal_mask=batch.legal_masks)
-                    policy_loss_tensor = -(safe_policy_targets * log_probs).sum(dim=1).mean()
-                    value_loss_tensor = TORCH.nn.functional.mse_loss(
-                        output.value, batch.value_targets
-                    )
-                    l2_loss_tensor = self._compute_l2_penalty()
-                    total_loss = policy_loss_tensor + value_loss_tensor + l2_loss_tensor
-                loss = total_loss / self._grad_accum_steps
-                self._scaler.scale(loss).backward()
+                self._scaler.scale(l2_loss_tensor / self._grad_accum_steps).backward()
             else:
-                output = self._model(batch.features)
-                log_probs = output.log_probs(legal_mask=batch.legal_masks)
-                policy_loss_tensor = -(safe_policy_targets * log_probs).sum(dim=1).mean()
-                value_loss_tensor = TORCH.nn.functional.mse_loss(
-                    output.value, batch.value_targets
-                )
-                l2_loss_tensor = self._compute_l2_penalty()
-                total_loss = policy_loss_tensor + value_loss_tensor + l2_loss_tensor
-                loss = total_loss / self._grad_accum_steps
-                loss.backward()
+                (l2_loss_tensor / self._grad_accum_steps).backward()
+
+            policy_loss_tensor = TORCH.tensor(
+                policy_loss_accum / total_examples, device=self._device
+            )
+            value_loss_tensor = TORCH.tensor(
+                value_loss_accum / total_examples, device=self._device
+            )
+            total_loss = policy_loss_tensor + value_loss_tensor + l2_loss_tensor
 
             accum_counter += 1
             should_step = (

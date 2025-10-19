@@ -32,5 +32,18 @@ ChessBrain is a modular chess experimentation platform built around the principl
 * NVidia 1080Ti 
 GRAD_ACCUM_STEPS=4  EPISODES=200 MCTS_SIMULATIONS=64 BATCH_SIZE=2048 TENSORBOARD_LOG_DIR=./tb_logs ./scripts/demo/run_training_cycle.sh
 
+## How to run with checkpoint
+  1. Initial run (writes checkpoints to MODEL_CHECKPOINT_DIR and metrics to TENSORBOARD_LOG_DIR):
+
+  2. Resume from the latest checkpoint and add 20 more episodes:
+     RESUME_CHECKPOINT=models/checkpoints/<your-checkpoint>.pt \
+     EPISODES=20 ./scripts/demo/run_training_cycle.sh
+     (Or use the raw CLI: python -m src.chessbrain.interface.cli.train ... --resume-checkpoint path.pt.)
+
+  3. Inspect progress live with TensorBoard:
+     tensorboard --logdir ${TENSORBOARD_LOG_DIR:-data/tensorboard}
+
+  4. Review exported games in TENSORBOARD_LOG_DIR/<job-id>/games/—worst_loss_step_*.pgn for the toughest cases and checkmate_step_*.pgn for decisive finishes.
+
 ## How to view the tensorboard 
 tensorboard --logdir ./tb_logs --port 6006

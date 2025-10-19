@@ -112,5 +112,6 @@ Keeping this map in sync with the codebase makes it easier to reason about perfo
 | `--grad-accum-steps` | `1` | Number of micro-batches to accumulate before stepping the optimizer. Increases effective batch size without extra memory (especially on 1080 Ti). |
 | `--mcts-simulations` | `32` | Number of rollouts per move in `AlphaZeroMCTS`. Dominates CPU time; reduce for speed, raise for stronger policy targets. |
 | `--mcts-cpuct` | `1.5` | Exploration constant balancing prior vs. value during MCTS selection. Tune alongside simulation count. |
+| `--resume-checkpoint` | `None` | Path to an existing `.pt` checkpoint; loads weights, continues from the stored `global_step`, and runs additional episodes. |
 
-> **Tip:** When running `scripts/demo/run_training_cycle.sh`, override these via environment variables (e.g., `EPISODES=200 GRAD_ACCUM_STEPS=4 ./scripts/demo/run_training_cycle.sh`). Use `NO_AMP=1` if you need to disable CUDA AMP.
+> **Tip:** When running `scripts/demo/run_training_cycle.sh`, override these via environment variables (e.g., `EPISODES=200 GRAD_ACCUM_STEPS=4 ./scripts/demo/run_training_cycle.sh`). Use `NO_AMP=1` to disable AMP, and set `RESUME_CHECKPOINT=/path/to/model.pt` to continue from a saved state.

@@ -9,6 +9,11 @@ from src.chessbrain.domain.training.replay_buffer import ReplayBuffer
 from src.chessbrain.domain.training.self_play import SelfPlayCollector, SelfPlayEpisode
 from src.chessbrain.infrastructure.rl.torch_compat import HAS_TORCH, TORCH
 
+if HAS_TORCH:
+    import torch  # type: ignore
+else:  # pragma: no cover - thin environments
+    torch = TORCH  # type: ignore
+
 
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:

@@ -41,7 +41,13 @@ class SelfPlayOrchestrator:
         self._checkpoint_publisher = checkpoint_publisher
         self._tensorboard_root = tensorboard_root
 
-    def start_job(self, config: TrainingConfig) -> TrainingJob:
+    def start_job(
+        self,
+        config: TrainingConfig,
+        *,
+        start_episode: int = 0,
+        resume_state: Optional[Dict[str, Any]] = None,
+    ) -> TrainingJob:
         job_id = uuid4()
         metrics_dir = self._tensorboard_root / job_id.hex
         metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -52,6 +58,8 @@ class SelfPlayOrchestrator:
             metrics_uri=str(metrics_dir),
         )
         job = self._repository.mark_running(job_id)
+        if start_episode > 0:
+            job = self._repository.record_progress(job_id, start_episode)
 
         start_time = time.time()
 
@@ -69,7 +77,7 @@ class SelfPlayOrchestrator:
             )
 
         last_artifact: Optional[CheckpointArtifact] = None
-        last_state: Optional[dict[str, Any]] = None
+        last_state: Optional[dict[str, Any]] = resume_state.copy() if resume_state else None
 
         def on_checkpoint(step: int, state: dict[str, Any]) -> None:
             nonlocal last_artifact, last_state
@@ -102,10 +110,11 @@ class SelfPlayOrchestrator:
                 )
 
         try:
-            checkpoint_every = max(1, config.total_episodes // 10)
+            remaining = max(config.total_episodes - start_episode, 1)
+            checkpoint_every = max(1, remaining // 10)
             result = self._training_loop.run(
                 config=config,
-                start_episode=job.episodes_played,
+                start_episode=start_episode,
                 max_episodes=config.total_episodes,
                 progress_callback=progress,
                 checkpoint_interval=checkpoint_every,
@@ -113,13 +122,17 @@ class SelfPlayOrchestrator:
                 episode_callback=episode_callback,
             )
 
-            episodes_played = job.episodes_played + result.episodes_played
-            job = self._repository.record_progress(job_id, episodes_played)
+            final_episode = (
+                result.metrics[-1].episode_index
+                if result.metrics
+                else start_episode
+            )
+            job = self._repository.record_progress(job_id, final_episode)
             self._write_metrics(metrics_dir, result.metrics)
 
             checkpoint_state = result.checkpoint_state or last_state
             if checkpoint_state is None:
-                last_episode = result.metrics[-1].episode_index if result.metrics else episodes_played
+                last_episode = final_episode
                 checkpoint_state = {
                     "global_step": last_episode,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -131,7 +144,7 @@ class SelfPlayOrchestrator:
             job = self._repository.mark_completed(
                 job_id=job_id,
                 checkpoint_version=artifact.version,
-                episodes_played=episodes_played,
+                episodes_played=final_episode,
             )
             return job
         except Exception as exc:  # pragma: no cover - defensive fallback

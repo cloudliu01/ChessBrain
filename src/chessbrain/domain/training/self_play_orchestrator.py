@@ -5,8 +5,11 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 import time
 from pathlib import Path
-from typing import Iterable, Optional, Any
+from typing import Iterable, Optional, Any, Dict
 from uuid import UUID, uuid4
+
+import chess
+import chess.pgn
 
 from src.chessbrain.infrastructure.persistence.training_job_repository import (
     TrainingJob,
@@ -73,6 +76,31 @@ class SelfPlayOrchestrator:
             last_artifact = self._checkpoint_publisher.publish(job_id, state)
             last_state = state
 
+        games_dir = metrics_dir / "games"
+        games_dir.mkdir(parents=True, exist_ok=True)
+
+        best_loss = float("-inf")
+
+        def episode_callback(step: int, episode, stats: Optional[dict[str, float]]) -> None:
+            nonlocal best_loss
+            if stats is not None:
+                total_loss = stats.get("total_loss", 0.0)
+                if total_loss > best_loss:
+                    best_loss = total_loss
+                    self._save_episode_game(
+                        games_dir / f"worst_loss_step_{step}.pgn",
+                        episode,
+                        step,
+                        stats,
+                    )
+            if episode.termination == "CHECKMATE":
+                self._save_episode_game(
+                    games_dir / f"checkmate_step_{step}.pgn",
+                    episode,
+                    step,
+                    stats,
+                )
+
         try:
             checkpoint_every = max(1, config.total_episodes // 10)
             result = self._training_loop.run(
@@ -82,6 +110,7 @@ class SelfPlayOrchestrator:
                 progress_callback=progress,
                 checkpoint_interval=checkpoint_every,
                 on_checkpoint=on_checkpoint,
+                episode_callback=episode_callback,
             )
 
             episodes_played = job.episodes_played + result.episodes_played
@@ -125,6 +154,48 @@ class SelfPlayOrchestrator:
                     )
                 )
                 handle.write("\n")
+
+    def _save_episode_game(
+        self,
+        path: Path,
+        episode,
+        episode_index: int,
+        stats: Optional[Dict[str, float]],
+    ) -> None:
+        game = chess.pgn.Game()
+        game.headers["Event"] = "ChessBrain Self-Play"
+        game.headers["Round"] = str(episode_index)
+        game.headers["Result"] = self._episode_result_header(episode)
+        if episode.termination:
+            game.headers["Termination"] = episode.termination
+        if episode.winner:
+            game.headers["Winner"] = episode.winner
+        game.headers["FinalFEN"] = episode.final_fen
+        game.headers["WinRate"] = f"{episode.win_rate:.2f}"
+        if stats:
+            game.headers["PolicyLoss"] = f"{stats.get('policy_loss', 0.0):.6f}"
+            game.headers["ValueLoss"] = f"{stats.get('value_loss', 0.0):.6f}"
+            game.headers["TotalLoss"] = f"{stats.get('total_loss', 0.0):.6f}"
+
+        node = game
+        board = chess.Board()
+        for move_uci in episode.moves:
+            move = chess.Move.from_uci(move_uci)
+            node = node.add_variation(move)
+            board.push(move)
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            handle.write(str(game))
+            handle.write("\n")
+
+    @staticmethod
+    def _episode_result_header(episode) -> str:
+        if episode.result > 0:
+            return "1-0"
+        if episode.result < 0:
+            return "0-1"
+        return "1/2-1/2"
 
 
 __all__ = ["SelfPlayOrchestrator"]

@@ -35,6 +35,12 @@ class TrainingSample:
 class SelfPlayEpisode:
     samples: List[TrainingSample]
     win_rate: float
+    moves: List[str]
+    san_moves: List[str]
+    termination: Optional[str]
+    winner: Optional[str]
+    result: float
+    final_fen: str
 
 
 class SelfPlayCollector:
@@ -61,7 +67,9 @@ class SelfPlayCollector:
 
     def generate_episode(self, model: torch.nn.Module) -> SelfPlayEpisode:  # type: ignore[misc]
         board = chess.Board()
-        pending: List[tuple[torch.Tensor, torch.Tensor, torch.Tensor, chess.Color]] = []
+        pending: List[tuple[torch.Tensor, torch.Tensor, torch.Tensor, chess.Color, str]] = []
+        moves: List[str] = []
+        san_moves: List[str] = []
         mcts = (
             AlphaZeroMCTS(
                 device=self._device,
@@ -103,7 +111,10 @@ class SelfPlayCollector:
                     if fallback_index is not None:
                         policy[fallback_index] = 1.0
 
-                pending.append((features, policy, legal_mask, board.turn))
+                san = board.san(move)
+                moves.append(move.uci())
+                san_moves.append(san)
+                pending.append((features, policy, legal_mask, board.turn, san))
                 board.push(move)
 
             outcome = board.outcome(claim_draw=True)
@@ -114,7 +125,7 @@ class SelfPlayCollector:
         else:
             result = 1.0 if outcome.winner == chess.WHITE else -1.0
 
-        for features, policy, legal_mask, color in pending:
+        for features, policy, legal_mask, color, _san in pending:
             value = result if color == chess.WHITE else -result
             samples.append(
                 TrainingSample(
@@ -132,7 +143,23 @@ class SelfPlayCollector:
         else:
             win_rate = 0.5
 
-        return SelfPlayEpisode(samples=samples, win_rate=win_rate)
+        termination = outcome.termination.name if outcome and outcome.termination else None
+        winner = None
+        if outcome and outcome.winner is not None:
+            winner = "white" if outcome.winner == chess.WHITE else "black"
+
+        final_fen = board.fen()
+
+        return SelfPlayEpisode(
+            samples=samples,
+            win_rate=win_rate,
+            moves=moves,
+            san_moves=san_moves,
+            termination=termination,
+            winner=winner,
+            result=float(result),
+            final_fen=final_fen,
+        )
 
     def _apply_exploration(self, policy: torch.Tensor, legal_mask: torch.Tensor) -> torch.Tensor:
         if self._exploration_epsilon <= 0.0:

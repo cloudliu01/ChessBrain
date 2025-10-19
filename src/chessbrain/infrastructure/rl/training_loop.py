@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Dict
 
 from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
 from src.chessbrain.domain.training.replay_buffer import ReplayBuffer
-from src.chessbrain.domain.training.self_play import SelfPlayCollector
+from src.chessbrain.domain.training.self_play import SelfPlayCollector, SelfPlayEpisode
 from src.chessbrain.infrastructure.rl.torch_compat import HAS_TORCH, TORCH
 
 
@@ -86,6 +86,7 @@ class TrainingLoop:
         progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
         checkpoint_interval: Optional[int] = None,
         on_checkpoint: Optional[Callable[[int, dict[str, Any]], None]] = None,
+        episode_callback: Optional[Callable[[int, SelfPlayEpisode, Optional[Dict[str, float]]], None]] = None,
     ) -> TrainingLoopResult:
         """Execute a bounded number of episodes starting from `start_episode`."""
         if start_episode >= config.total_episodes:
@@ -115,6 +116,7 @@ class TrainingLoop:
             progress_callback,
             checkpoint_interval,
             on_checkpoint,
+            episode_callback,
         )
 
     def attach_collector(self, collector: SelfPlayCollector) -> None:
@@ -179,6 +181,7 @@ class TrainingLoop:
         progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
         checkpoint_interval: Optional[int] = None,
         on_checkpoint: Optional[Callable[[int, dict[str, Any]], None]] = None,
+        episode_callback: Optional[Callable[[int, SelfPlayEpisode, Optional[Dict[str, float]]], None]] = None,
     ) -> TrainingLoopResult:
         assert self._collector is not None
         assert self._model is not None
@@ -198,6 +201,30 @@ class TrainingLoop:
             episode_index = start_episode + offset + 1
             episode = self._collector.generate_episode(self._model)
             self._replay_buffer.add_episode(episode)
+
+            episode_stats: Optional[dict[str, float]] = None
+            if episode.samples:
+                with TORCH.no_grad():
+                    features = TORCH.stack([sample.features for sample in episode.samples]).to(self._device)
+                    policy_targets = TORCH.stack([sample.policy_target for sample in episode.samples]).to(self._device)
+                    legal_masks = TORCH.stack([sample.legal_mask for sample in episode.samples]).to(self._device)
+                    value_targets = TORCH.tensor(
+                        [sample.value_target for sample in episode.samples],
+                        dtype=TORCH.float32,
+                        device=self._device,
+                    ).unsqueeze(1)
+                    outputs = self._model(features)
+                    episode_log_probs = outputs.log_probs(legal_mask=legal_masks)
+                    ep_policy_loss = -(policy_targets * episode_log_probs).sum(dim=1).mean().item()
+                    ep_value_loss = TORCH.nn.functional.mse_loss(outputs.value, value_targets).item()
+                    episode_stats = {
+                        "policy_loss": float(ep_policy_loss),
+                        "value_loss": float(ep_value_loss),
+                        "total_loss": float(ep_policy_loss + ep_value_loss),
+                    }
+
+            if episode_callback is not None:
+                episode_callback(episode_index, episode, episode_stats)
 
             samples = self._replay_buffer.sample(config.batch_size)
             if not samples:

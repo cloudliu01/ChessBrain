@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Iterable, List, Sequence
+from typing import Any, Deque, Iterable, List, Sequence
 
 import random
 
@@ -66,6 +66,53 @@ class ReplayBuffer:
             legal_masks=legal_masks,
             value_targets=value_targets,
         )
+
+    def state_dict(self) -> dict[str, Any]:
+        """Serialize buffer contents for checkpointing."""
+        samples_payload: list[dict[str, torch.Tensor | float]] = []
+
+        for sample in self._storage:
+            samples_payload.append(
+                {
+                    "features": sample.features.detach().clone().cpu(),
+                    "policy_target": sample.policy_target.detach().clone().cpu(),
+                    "legal_mask": sample.legal_mask.detach().clone().cpu(),
+                    "value_target": float(sample.value_target),
+                }
+            )
+
+        return {
+            "capacity": self._capacity,
+            "samples": samples_payload,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore buffer contents from a previously serialized snapshot."""
+        capacity = int(state.get("capacity", self._capacity))
+        samples_payload = state.get("samples", [])
+
+        self._capacity = capacity
+        self._storage = deque(maxlen=capacity)
+
+        for payload in samples_payload:
+            features = payload["features"]
+            policy_target = payload["policy_target"]
+            legal_mask = payload["legal_mask"]
+            value_target = float(payload["value_target"])
+            if isinstance(features, torch.Tensor):
+                features = features.detach().clone().cpu()
+            if isinstance(policy_target, torch.Tensor):
+                policy_target = policy_target.detach().clone().cpu()
+            if isinstance(legal_mask, torch.Tensor):
+                legal_mask = legal_mask.detach().clone().cpu()
+            self._storage.append(
+                TrainingSample(
+                    features=features,
+                    policy_target=policy_target,
+                    value_target=value_target,
+                    legal_mask=legal_mask,
+                )
+            )
 
 
 __all__ = ["ReplayBatch", "ReplayBuffer"]

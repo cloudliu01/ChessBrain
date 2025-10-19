@@ -70,9 +70,6 @@ def main(
     start_episode = 0
     if resume_checkpoint is not None:
         resume_state = torch.load(resume_checkpoint, map_location=device)
-        state_dict = resume_state.get("model_state_dict")
-        if state_dict:
-            model.load_state_dict(state_dict)
         start_episode = int(resume_state.get("global_step", 0))
         click.echo(
             f"Resuming from checkpoint {resume_checkpoint} at episode {start_episode}.",

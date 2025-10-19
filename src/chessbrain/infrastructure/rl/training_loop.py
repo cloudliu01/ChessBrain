@@ -72,6 +72,7 @@ class TrainingLoop:
         self._use_amp = False
         self._scaler = None
         self._micro_batch_size = micro_batch_size
+        self._resume_loaded = False
 
         if HAS_TORCH and self._model is None:
             self._model = AlphaZeroResidualNetwork().to(self._device)
@@ -94,6 +95,7 @@ class TrainingLoop:
         checkpoint_interval: Optional[int] = None,
         on_checkpoint: Optional[Callable[[int, dict[str, Any]], None]] = None,
         episode_callback: Optional[Callable[[int, SelfPlayEpisode, Optional[Dict[str, float]]], None]] = None,
+        resume_state: Optional[dict[str, Any]] = None,
     ) -> TrainingLoopResult:
         """Execute a bounded number of episodes starting from `start_episode`."""
         if start_episode >= config.total_episodes:
@@ -103,6 +105,10 @@ class TrainingLoop:
         episodes_to_run = remaining if max_episodes is None else min(remaining, max_episodes)
         if episodes_to_run <= 0:
             return TrainingLoopResult(episodes_played=0, metrics=[], checkpoint_state=None)
+
+        if resume_state and not self._resume_loaded:
+            self._apply_resume_state(config, resume_state)
+            self._resume_loaded = True
 
         if self._replay_buffer is None:
             capacity = max(config.batch_size * 4, config.batch_size)
@@ -140,7 +146,6 @@ class TrainingLoop:
         progress_callback: Optional[Callable[[EpisodeMetrics, int, int], None]] = None,
     ) -> TrainingLoopResult:
         metrics: list[EpisodeMetrics] = []
-        checkpoint_state: Optional[dict] = None
 
         TORCH.manual_seed(config.seed + start_episode)
 
@@ -168,11 +173,7 @@ class TrainingLoop:
             )
 
             if should_checkpoint:
-                checkpoint_state = {
-                    "global_step": episode_index,
-                    "device": getattr(self._device, "type", "cpu"),
-                    "exploration_rate": config.exploration_rate,
-                }
+                checkpoint_state = self._capture_checkpoint_state(config, episode_index)
 
         return TrainingLoopResult(
             episodes_played=episodes_to_run,
@@ -343,16 +344,7 @@ class TrainingLoop:
                 emit_checkpoint = True
 
             if emit_checkpoint:
-                checkpoint_state = {
-                    "global_step": episode_index,
-                    "device": self._device.type,
-                    "exploration_rate": config.exploration_rate,
-                    "model_state_dict": {
-                        key: value.detach().cpu()
-                        for key, value in self._model.state_dict().items()
-                    },
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
-                }
+                checkpoint_state = self._capture_checkpoint_state(config, episode_index)
                 last_checkpoint_state = checkpoint_state
                 if on_checkpoint is not None:
                     on_checkpoint(episode_index, dict(checkpoint_state))
@@ -388,6 +380,70 @@ class TrainingLoop:
         if not l2_terms:
             return TORCH.tensor(0.0, device=self._device)
         return TORCH.stack(l2_terms).sum() * self._l2_coefficient
+
+    def _apply_resume_state(self, config: TrainingConfig, state: dict[str, Any]) -> None:
+        if not state:
+            return
+
+        if HAS_TORCH and self._model is not None:
+            model_state = state.get("model_state_dict")
+            if model_state:
+                self._model.load_state_dict(model_state)
+                self._model.to(self._device)
+
+        optimizer_state = state.get("optimizer_state_dict")
+        if optimizer_state and self._optimizer is not None:
+            self._optimizer.load_state_dict(optimizer_state)
+
+        scaler_state = state.get("scaler_state_dict")
+        if scaler_state and self._use_amp and self._scaler is not None:
+            self._scaler.load_state_dict(scaler_state)
+
+        buffer_state = state.get("replay_buffer_state")
+        if buffer_state:
+            if self._replay_buffer is None:
+                buffer_capacity = int(
+                    buffer_state.get("capacity", max(config.batch_size * 4, config.batch_size))
+                )
+                self._replay_buffer = ReplayBuffer(capacity=buffer_capacity)
+            self._replay_buffer.load_state_dict(buffer_state)
+
+    def _capture_checkpoint_state(self, config: TrainingConfig, global_step: int) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "global_step": global_step,
+            "device": getattr(self._device, "type", "cpu"),
+            "exploration_rate": config.exploration_rate,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if HAS_TORCH and self._model is not None:
+            state["model_state_dict"] = {
+                key: value.detach().clone().cpu()
+                for key, value in self._model.state_dict().items()
+            }
+
+        if self._optimizer is not None:
+            state["optimizer_state_dict"] = self._to_cpu(self._optimizer.state_dict())
+
+        if self._use_amp and self._scaler is not None:
+            state["scaler_state_dict"] = self._scaler.state_dict()
+
+        if self._replay_buffer is not None:
+            state["replay_buffer_state"] = self._replay_buffer.state_dict()
+
+        return state
+
+    @staticmethod
+    def _to_cpu(value: Any) -> Any:
+        if HAS_TORCH and isinstance(value, TORCH.Tensor):
+            return value.detach().clone().cpu()
+        if isinstance(value, dict):
+            return {key: TrainingLoop._to_cpu(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [TrainingLoop._to_cpu(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(TrainingLoop._to_cpu(item) for item in value)
+        return value
 
 
 __all__ = [

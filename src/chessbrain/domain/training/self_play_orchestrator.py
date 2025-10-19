@@ -148,6 +148,7 @@ class SelfPlayOrchestrator:
                 checkpoint_interval=checkpoint_every,
                 on_checkpoint=on_checkpoint,
                 episode_callback=episode_callback,
+                resume_state=resume_state,
             )
 
             final_episode = (

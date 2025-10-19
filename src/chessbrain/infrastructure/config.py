@@ -15,6 +15,8 @@ class AppConfig:
     flask_env: str = "production"
     pytorch_device_preference: str = "auto"
     additional: dict[str, str] = field(default_factory=dict)
+    active_model_path: Path | None = None
+    active_model_version: str | None = None
 
 
 def load_config(prefix: str = "") -> AppConfig:
@@ -27,6 +29,11 @@ def load_config(prefix: str = "") -> AppConfig:
     database_url = _get_env("DATABASE_URL", "postgresql+psycopg://localhost/chessbrain")
     checkpoint_dir = Path(_get_env("MODEL_CHECKPOINT_DIR", "models/checkpoints")).resolve()
     tensorboard_dir = Path(_get_env("TENSORBOARD_LOG_DIR", "data/tensorboard")).resolve()
+    active_model_raw = _get_env("ACTIVE_MODEL_PATH", "")
+    active_model_path = Path(active_model_raw).resolve() if active_model_raw else None
+    active_model_version = _get_env("ACTIVE_MODEL_VERSION", "") or None
+    if not active_model_version and active_model_path is not None:
+        active_model_version = active_model_path.stem
 
     additional_keys = (
         "STRUCTLOG_LEVEL",
@@ -46,6 +53,8 @@ def load_config(prefix: str = "") -> AppConfig:
         flask_env=_get_env("FLASK_ENV", "production"),
         pytorch_device_preference=_get_env("PYTORCH_DEVICE", "auto"),
         additional=additional,
+        active_model_path=active_model_path,
+        active_model_version=active_model_version,
     )
 
 

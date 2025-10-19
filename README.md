@@ -75,3 +75,19 @@ DATABASE_URL=sqlite+pysqlite:///$(pwd)/.chessbrain-training.sqlite \
 
 ## How to view the tensorboard 
 tensorboard --logdir ./tb_logs --port 6006
+
+## Browser Match Play
+1. Launch the Flask API with your active model:
+   ```bash
+   export ACTIVE_MODEL_PATH=$(pwd)/models/checkpoints/c3ade8cf-step185-20251019171110.pt
+   export DATABASE_URL=sqlite+pysqlite:///$(pwd)/.chessbrain-match.sqlite
+   python -m flask --app src.chessbrain.interface.http.app:create_app run --port 5001
+   ```
+2. In another terminal, run the React client:
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+3. Open http://localhost:5173/match to play against the AI. The match page auto-creates a session, enforces legal moves, and mirrors engine replies.
+4. To validate the API loop headlessly, run `./scripts/demo/play_vs_ai.sh`; it starts the server, plays a short sequence, and prints the resulting move list.

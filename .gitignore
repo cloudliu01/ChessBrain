@@ -4,7 +4,10 @@ venv312
 venv31*
 *pyc
 *.DS_Store
+tmp/*
+.chessbrain-*.sqlite
 tests/.artifacts
 tb_logs
-models/checkpoints
+models/checkpoints*
 data/tensorboard
+frontend/node_modules/*

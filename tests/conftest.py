@@ -9,6 +9,7 @@ from src.chessbrain.infrastructure.persistence.base import (
     Base,
     create_engine_from_config,
 )
+from src.chessbrain.infrastructure.persistence import game_session_repository  # noqa: F401
 from src.chessbrain.interface.http.app import create_app
 
 

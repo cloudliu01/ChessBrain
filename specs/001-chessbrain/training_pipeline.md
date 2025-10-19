@@ -6,7 +6,7 @@ This document captures the current self-play training pipeline, the major compon
 
 ```mermaid
 flowchart TD
-    CLI["CLI Entrypoint<br/>`python -m ...train`"] --> APP["App Config + Device Resolution"]
+    CLI["CLI Entrypoint<br/>python -m ...train"] --> APP["App Config + Device Resolution"]
     APP --> ORCH["SelfPlayOrchestrator"]
     ORCH --> LOOP["TrainingLoop<br/>GPU-backed\nforward/backward"]
     LOOP -->|collects episodes| COLLECT["SelfPlayCollector<br/>+ MCTS Policy Improvement"]
@@ -112,5 +112,43 @@ Keeping this map in sync with the codebase makes it easier to reason about perfo
 | `--grad-accum-steps` | `1` | Number of micro-batches to accumulate before stepping the optimizer. Increases effective batch size without extra memory (especially on 1080 Ti). |
 | `--mcts-simulations` | `32` | Number of rollouts per move in `AlphaZeroMCTS`. Dominates CPU time; reduce for speed, raise for stronger policy targets. |
 | `--mcts-cpuct` | `1.5` | Exploration constant balancing prior vs. value during MCTS selection. Tune alongside simulation count. |
+| `--producer-workers` | `0` | Number of parallel CPU workers generating self-play episodes asynchronously. Enables producer/consumer pipeline. |
+| `--producer-queue-size` | `16` | Bounded queue capacity for precomputed episodes. Increase if workers idle waiting for consumer. |
+| `--producer-device` | `cpu` | Device assigned to producer workers (typically CPU). |
+
 
 > **Tip:** When running `scripts/demo/run_training_cycle.sh`, override these via environment variables (e.g., `EPISODES=200 GRAD_ACCUM_STEPS=4 ./scripts/demo/run_training_cycle.sh`). Use `NO_AMP=1` if you need to disable CUDA AMP.
+
+## 7. Parallelising CPU-Heavy Stages (Future Option)
+
+Yes—because episode generation and MCTS are CPU-bound, you can decouple them from the GPU training loop using multiple threads or subprocesses. A high-level pattern that fits the current structure:
+
+- **Producer pool (CPU)**: spawn N collectors (threads or `multiprocessing.Process`) that each run `SelfPlayCollector.generate_episode()`. Producers push serialized samples (e.g., NumPy tensors or PyTorch `tensor.save`) onto a disk-backed queue or shared multiprocessing queue.
+- **Intermediate storage**: either
+  - in-memory queue (bounded) feeding directly into the replay buffer, or
+  - filesystem shards (`./tmp/replay_shard_*.pt`) that the trainer ingests later, batching GPU loads when ready.
+- **Consumer (GPU)**: the existing `TrainingLoop` becomes a consumer—draining the queue/files, converting to tensors on GPU, and performing backward passes.
+
+This keeps CPUs saturated preparing data while the GPU trains in larger, steady batches.
+
+```mermaid
+flowchart LR
+    subgraph Producers["CPU Producers (parallel)"]
+        P1["Collector Process 1"] --> Q
+        P2["Collector Process 2"] --> Q
+        PN["Collector Process N"] --> Q
+    end
+
+    Q["Shared Queue / Disk Shards"] --> C["TrainingLoop Consumer\n(GPU batches)"]
+    C --> CKPT2["Checkpoints"]
+    C --> MET2["Metrics"]
+```
+
+**Implementation sketch within this repo**
+
+1. Wrap `SelfPlayCollector.generate_episode` in a worker function that serializes `TrainingSample` tensors to CPU memory (or disk).
+2. Use `multiprocessing.Queue` (start method `spawn`) or a lightweight streaming format (e.g., `.pt` files) to hand off batches to the main process.
+3. In `TrainingLoop`, replace direct `generate_episode` calls with `queue.get(batch)` + `ReplayBuffer.add_batch()`. GPU training proceeds unchanged, but now batches arrive precomputed.
+4. Ensure graceful shutdown by signalling producers when the requested number of episodes is reached.
+
+This model raises GPU utilization, limits contention inside Python’s GIL, and lets you profile producer/consumer stages independently. Future variants could run producers on remote nodes while the GPU host focuses strictly on training. 

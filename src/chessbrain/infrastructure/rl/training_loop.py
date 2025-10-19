@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 from src.chessbrain.domain.models.policy_value_network import AlphaZeroResidualNetwork
 from src.chessbrain.domain.training.replay_buffer import ReplayBuffer
 from src.chessbrain.domain.training.self_play import SelfPlayCollector
+from src.chessbrain.domain.training.episode_producer_pool import EpisodeProducerPool
 from src.chessbrain.infrastructure.rl.torch_compat import HAS_TORCH, TORCH
 
 
@@ -53,6 +54,10 @@ class TrainingLoop:
         replay_buffer: Optional[ReplayBuffer] = None,
         grad_accum_steps: int = 1,
         use_amp: bool = False,
+        collector_config: Optional[dict] = None,
+        producer_workers: int = 0,
+        producer_queue_size: int = 16,
+        producer_device: str = "cpu",
     ) -> None:
         self._device = device
         self._model = model
@@ -64,6 +69,8 @@ class TrainingLoop:
         self._grad_accum_steps = max(1, grad_accum_steps)
         self._use_amp = False
         self._scaler = None
+        self._collector_config = collector_config or {}
+        self._producer_pool: Optional[EpisodeProducerPool] = None
 
         if HAS_TORCH and self._model is None:
             self._model = AlphaZeroResidualNetwork().to(self._device)
@@ -76,6 +83,26 @@ class TrainingLoop:
             if use_amp and getattr(self._device, "type", "") == "cuda":
                 self._use_amp = True
                 self._scaler = TORCH.cuda.amp.GradScaler()
+
+        if self._collector is None and producer_workers <= 0:
+            raise ValueError("SelfPlayCollector is required when no producer workers are configured.")
+
+        if producer_workers > 0 and self._model is not None:
+            model_kwargs = self._extract_model_kwargs(self._model)
+            collector_kwargs = dict(self._collector_config)
+            collector_kwargs.setdefault("temperature", 1.0)
+            collector_kwargs.setdefault("max_moves", 160)
+            collector_kwargs.setdefault("exploration_epsilon", 0.0)
+            collector_kwargs.setdefault("mcts_simulations", 64)
+            collector_kwargs.setdefault("mcts_c_puct", 1.5)
+            self._producer_pool = EpisodeProducerPool(
+                workers=producer_workers,
+                model_kwargs=model_kwargs,
+                collector_kwargs=collector_kwargs,
+                device=producer_device,
+                queue_size=producer_queue_size,
+            )
+            self._producer_pool.start(self._model.state_dict())
 
     def run(
         self,
@@ -112,7 +139,8 @@ class TrainingLoop:
         self._collector = collector
 
     def _should_use_self_play(self) -> bool:
-        return HAS_TORCH and self._model is not None and self._collector is not None and self._optimizer is not None
+        has_generator = self._collector is not None or self._producer_pool is not None
+        return HAS_TORCH and self._model is not None and has_generator and self._optimizer is not None
 
     def _run_deterministic(
         self,
@@ -183,7 +211,9 @@ class TrainingLoop:
 
         for offset in range(episodes_to_run):
             episode_index = start_episode + offset + 1
-            episode = self._collector.generate_episode(self._model)
+            episode = self._next_episode()
+            if episode is None:
+                continue
             self._replay_buffer.add_episode(episode)
 
             samples = self._replay_buffer.sample(config.batch_size)
@@ -244,6 +274,9 @@ class TrainingLoop:
                     self._optimizer.step()
                 self._optimizer.zero_grad(set_to_none=True)
 
+                if self._producer_pool is not None:
+                    self._producer_pool.update_from_model(self._model)
+
             metric = EpisodeMetrics(
                 episode_index=episode_index,
                 policy_loss=float(policy_loss_tensor.detach().cpu().item()),
@@ -276,6 +309,28 @@ class TrainingLoop:
             metrics=metrics,
             checkpoint_state=checkpoint_state,
         )
+
+    def _next_episode(self) -> Optional[Any]:
+        if self._producer_pool is not None:
+            return self._producer_pool.get_episode(timeout=10)
+        if self._collector is None:
+            return None
+        return self._collector.generate_episode(self._model)
+
+    def _extract_model_kwargs(self, model: AlphaZeroResidualNetwork) -> dict:
+        residual_blocks = len(getattr(model, "residual_blocks", []))
+        channels = getattr(model.residual_blocks[0].conv1, "out_channels", 192) if residual_blocks else 192
+        return {
+            "residual_blocks": residual_blocks or 16,
+            "channels": channels,
+            "input_channels": getattr(model, "input_channels", 20),
+            "action_space_size": getattr(model, "action_space_size", 4672),
+        }
+
+    def shutdown(self) -> None:
+        if self._producer_pool is not None:
+            self._producer_pool.shutdown()
+            self._producer_pool = None
 
     def _compute_l2_penalty(self) -> TORCH.Tensor:
         if self._l2_coefficient <= 0:

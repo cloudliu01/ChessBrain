@@ -11,7 +11,7 @@ ChessBrain is a modular chess experimentation platform built around the principl
 
 ## Getting Started
 
-1. Create a virtual environment (Python 3.10+).
+1. Create a virtual environment (Python 3.11+).
 2. Install dependencies:
    ```bash
    pip install -e ".[dev]"
@@ -21,8 +21,16 @@ ChessBrain is a modular chess experimentation platform built around the principl
    pytest
    ```
 
-## Next Steps
+## Usage
 
-- Extend the domain layer with full chess move generation and validation.
-- Add visualization/analysis tooling in the interface layer.
-- Wire advanced engines or external services through the infrastructure layer.
+### e.g. spawn 4 CPU producers feeding a queue of 32 episodes
+  PRODUCER_WORKERS=4 PRODUCER_QUEUE_SIZE=32 ./scripts/demo/run_training_cycle.sh
+
+  Set PRODUCER_DEVICE if you want producers on a different device (default cpu). The training loop still supports synchronous mode when PRODUCER_WORKERS=0.
+
+### Tests
+  PYTHONPATH=. DATABASE_URL=sqlite+pysqlite:///:memory: ./venv312/bin/pytest \
+    tests/unit/test_move_encoding.py \
+    tests/unit/test_policy_value_network.py \
+    tests/unit/test_training_loop.py \
+    tests/integration/test_training_runner.py -q

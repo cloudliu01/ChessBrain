@@ -24,9 +24,8 @@ ChessBrain is a modular chess experimentation platform built around the principl
 ## Usage
 
 ### e.g. spawn 4 CPU producers feeding a queue of 32 episodes
-  PRODUCER_WORKERS=4 PRODUCER_QUEUE_SIZE=32 ./scripts/demo/run_training_cycle.sh
+  PRODUCER_WORKERS=4 PRODUCER_QUEUE_SIZE=32 PRODUCER_DEVICE=cuda GRAD_ACCUM_STEPS=4 MCTS_SIMULATIONS=64  EPISODES=200 BATCH_SIZE=128  ./scripts/demo/run_training_cycle.sh
 
-  Set PRODUCER_DEVICE if you want producers on a different device (default cpu). The training loop still supports synchronous mode when PRODUCER_WORKERS=0.
 
 ### Tests
   PYTHONPATH=. DATABASE_URL=sqlite+pysqlite:///:memory: ./venv312/bin/pytest \

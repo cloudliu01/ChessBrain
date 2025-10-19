@@ -7,3 +7,4 @@ venv31*
 tests/.artifacts
 tb_logs
 models/checkpoints
+data/tensorboard

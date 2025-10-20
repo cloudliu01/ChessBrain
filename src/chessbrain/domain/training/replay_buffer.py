@@ -22,7 +22,7 @@ class ReplayBatch:
 class ReplayBuffer:
     """Fixed-capacity buffer storing self-play training samples."""
 
-    def __init__(self, *, capacity: int = 8192) -> None:
+    def __init__(self, *, capacity: int = 32768) -> None:
         self._capacity = capacity
         self._storage: Deque[TrainingSample] = deque(maxlen=capacity)
 
@@ -43,9 +43,14 @@ class ReplayBuffer:
     def sample(self, batch_size: int) -> Sequence[TrainingSample]:
         if not self._storage:
             return ()
-        if batch_size <= 0 or batch_size >= len(self._storage):
-            return tuple(self._storage)
-        return tuple(random.sample(list(self._storage), batch_size))
+        if batch_size <= 0:
+            return ()
+
+        window = max(batch_size * 4, batch_size * 2)
+        candidates = list(self._storage)[-window:]
+        if batch_size >= len(candidates):
+            return tuple(candidates)
+        return tuple(random.sample(candidates, batch_size))
 
     def as_batch(self, samples: Iterable[TrainingSample], *, device: torch.device) -> ReplayBatch:
         samples_list = list(samples)

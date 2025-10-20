@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 import chess
 
@@ -46,6 +47,14 @@ class SelfPlayEpisode:
 class SelfPlayCollector:
     """Generate self-play experience using the current policy/value network."""
 
+    _DEFAULT_OPENINGS: Sequence[Sequence[str]] = (
+        ("e2e4", "e7e5", "g1f3", "b8c6"),
+        ("d2d4", "d7d5", "c2c4", "e7e6"),
+        ("c2c4", "e7e5", "g1f3", "b8c6"),
+        ("g1f3", "d7d5", "d2d4", "g8f6"),
+        ("f2f4", "e7e5", "g2g3", "d7d5"),
+    )
+
     def __init__(
         self,
         *,
@@ -55,6 +64,8 @@ class SelfPlayCollector:
         exploration_epsilon: float = 0.0,
         mcts_simulations: int = 64,
         mcts_c_puct: float = 1.5,
+        opening_sequences: Optional[Sequence[Sequence[str]]] = None,
+        opening_shuffle_moves: int = 4,
     ) -> None:
         if torch is None:  # pragma: no cover - enforced by import guards
             raise RuntimeError("PyTorch is required for SelfPlayCollector")
@@ -64,12 +75,23 @@ class SelfPlayCollector:
         self._exploration_epsilon = exploration_epsilon
         self._mcts_simulations = mcts_simulations
         self._mcts_c_puct = mcts_c_puct
+        self._opening_sequences: List[List[str]] = [
+            list(sequence) for sequence in (opening_sequences or self._DEFAULT_OPENINGS)
+        ]
+        self._opening_shuffle_moves = max(0, opening_shuffle_moves)
 
     def generate_episode(self, model: torch.nn.Module) -> SelfPlayEpisode:  # type: ignore[misc]
         board = chess.Board()
         pending: List[tuple[torch.Tensor, torch.Tensor, torch.Tensor, chess.Color, str]] = []
         moves: List[str] = []
         san_moves: List[str] = []
+
+        opening_prefix = self._apply_opening_sequence(board)
+        if opening_prefix:
+            for uci, san in opening_prefix:
+                moves.append(uci)
+                san_moves.append(san)
+
         mcts = (
             AlphaZeroMCTS(
                 device=self._device,
@@ -81,7 +103,7 @@ class SelfPlayCollector:
         )
 
         with torch.no_grad():
-            for _ply in range(self._max_moves):
+            for _ply in range(max(0, self._max_moves - len(opening_prefix))):
                 if board.is_game_over(claim_draw=True):
                     break
 
@@ -203,6 +225,34 @@ class SelfPlayCollector:
             normalized[legal_indices] = 1.0 / legal_indices.numel()
             return normalized
         return torch.full_like(policy, 1.0 / policy.numel())
+
+    def _apply_opening_sequence(self, board: chess.Board) -> List[tuple[str, str]]:
+        if not self._opening_sequences:
+            return []
+
+        sequence = random.choice(self._opening_sequences)
+        if not sequence:
+            return []
+
+        max_prefix = len(sequence)
+        if self._opening_shuffle_moves > 0:
+            max_prefix = min(max_prefix, self._opening_shuffle_moves)
+
+        if max_prefix <= 0:
+            return []
+
+        prefix_len = random.randint(1, max_prefix)
+        applied: List[tuple[str, str]] = []
+        for uci in sequence[:prefix_len]:
+            move = chess.Move.from_uci(uci)
+            if move not in board.legal_moves:
+                break
+            san = board.san(move)
+            applied.append((uci, san))
+            board.push(move)
+            if board.is_game_over(claim_draw=True):
+                break
+        return applied
 
 
 __all__ = ["SelfPlayCollector", "SelfPlayEpisode", "TrainingSample"]

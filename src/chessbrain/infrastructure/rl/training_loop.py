@@ -111,7 +111,7 @@ class TrainingLoop:
             self._resume_loaded = True
 
         if self._replay_buffer is None:
-            capacity = max(config.batch_size * 4, config.batch_size)
+            capacity = max(config.batch_size * 8, config.batch_size * 2)
             self._replay_buffer = ReplayBuffer(capacity=capacity)
 
         if not self._should_use_self_play():
@@ -317,7 +317,7 @@ class TrainingLoop:
                 if self._use_amp:
                     assert self._scaler is not None
                     self._scaler.unscale_(self._optimizer)
-                TORCH.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=5.0)
+                TORCH.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=3.0)
                 if self._use_amp:
                     self._scaler.step(self._optimizer)
                     self._scaler.update()

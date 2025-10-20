@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import chess
 import torch
@@ -49,10 +49,12 @@ class AlphaZeroMCTS:
         device: torch.device,
         simulations: int = 64,
         c_puct: float = 1.5,
+        evaluation_batch_size: int = 8,
     ) -> None:
         self._device = device
         self._simulations = simulations
         self._c_puct = c_puct
+        self._eval_batch_size = max(1, evaluation_batch_size)
 
     def run(self, board: chess.Board, model: torch.nn.Module) -> torch.Tensor:
         root_board = board.copy(stack=False)
@@ -66,35 +68,25 @@ class AlphaZeroMCTS:
                 policy[mask > 0] = 1.0 / legal_count
             return policy
 
-        self._expand(root, model)
+        self._evaluate_batch([root], [root_board], model)
 
-        for _ in range(self._simulations):
-            node = root
-            board_copy = root_board.copy(stack=False)
-            path: List[Tuple[_Node, int]] = []
+        remaining = self._simulations
+        while remaining > 0:
+            batch_size = min(self._eval_batch_size, remaining)
+            nodes: List[_Node] = []
+            boards: List[chess.Board] = []
+            paths: List[List[Tuple[_Node, int]]] = []
 
-            # Selection
-            while not node.is_terminal and node.stats:
-                move_index = self._select_move(node)
-                move = decode_index(board_copy, move_index)
-                if move is None:
-                    node.stats.pop(move_index, None)
-                    continue
-                board_copy.push(move)
-                path.append((node, move_index))
-                if move_index not in node.children:
-                    child_node = _Node(
-                        board=board_copy.copy(stack=False),
-                        parent=node,
-                        is_terminal=board_copy.is_game_over(claim_draw=True),
-                    )
-                    node.children[move_index] = child_node
-                    node = child_node
-                    break
-                node = node.children[move_index]
+            for _ in range(batch_size):
+                node, board_state, path = self._traverse(root, root_board)
+                nodes.append(node)
+                boards.append(board_state)
+                paths.append(path)
 
-            value = self._evaluate(node, model)
-            self._backpropagate(path, value)
+            values = self._evaluate_batch(nodes, boards, model)
+            for path, value in zip(paths, values):
+                self._backpropagate(path, value)
+            remaining -= len(nodes)
 
         policy = torch.zeros(ACTION_SPACE_SIZE, dtype=torch.float32, device=self._device)
         for move_index, stats in root.stats.items():
@@ -109,30 +101,6 @@ class AlphaZeroMCTS:
                 policy[mask > 0] = 1.0 / legal_count
         return policy
 
-    def _expand(self, node: _Node, model: torch.nn.Module) -> float:
-        if node.is_terminal:
-            outcome = node.board.outcome(claim_draw=True)
-            if outcome is None or outcome.winner is None:
-                return 0.0
-            return 1.0 if outcome.winner == node.board.turn else -1.0
-
-        features = board_to_tensor(node.board, device=self._device)
-        output = model.inference(features.unsqueeze(0))
-
-        logits = output.flatten_policy().squeeze(0)
-        mask = legal_moves_mask(node.board, device=self._device)
-        priors = policy_from_masked_logits(logits, mask)
-
-        node.stats.clear()
-        for move in node.board.legal_moves:
-            move_index = encode_index(node.board, move)
-            if move_index is None:
-                continue
-            node.stats[move_index] = _ChildStats(prior=float(priors[move_index].item()))
-
-        node.total_visits = 0
-        return float(output.value.item())
-
     def _select_move(self, node: _Node) -> int:
         best_score = float("-inf")
         best_move = -1
@@ -146,10 +114,6 @@ class AlphaZeroMCTS:
                 best_move = move_index
         return best_move
 
-    def _evaluate(self, node: _Node, model: torch.nn.Module) -> float:
-        value = self._expand(node, model)
-        return value
-
     def _backpropagate(self, path: List[Tuple[_Node, int]], value: float) -> None:
         current_value = value
         for node, move_index in reversed(path):
@@ -160,6 +124,88 @@ class AlphaZeroMCTS:
             stats.value_sum += current_value
             node.total_visits += 1
             current_value = -current_value
+
+    def _traverse(
+        self,
+        root: _Node,
+        root_board: chess.Board,
+    ) -> Tuple[_Node, chess.Board, List[Tuple[_Node, int]]]:
+        node = root
+        board_copy = root_board.copy(stack=False)
+        path: List[Tuple[_Node, int]] = []
+
+        while not node.is_terminal and node.stats:
+            move_index = self._select_move(node)
+            move = decode_index(board_copy, move_index)
+            if move is None:
+                node.stats.pop(move_index, None)
+                continue
+            board_copy.push(move)
+            path.append((node, move_index))
+            child = node.children.get(move_index)
+            if child is None:
+                child = _Node(
+                    board=board_copy.copy(stack=False),
+                    parent=node,
+                    is_terminal=board_copy.is_game_over(claim_draw=True),
+                )
+                node.children[move_index] = child
+                node = child
+                break
+            node = child
+        return node, board_copy, path
+
+    def _evaluate_batch(
+        self,
+        nodes: Sequence[_Node],
+        boards: Sequence[chess.Board],
+        model: torch.nn.Module,
+    ) -> List[float]:
+        features: List[torch.Tensor] = []
+        mapping: List[int] = []
+        values: List[float] = [0.0 for _ in nodes]
+
+        for idx, (node, board) in enumerate(zip(nodes, boards)):
+            if board.is_game_over(claim_draw=True):
+                node.is_terminal = True
+                node.stats.clear()
+                node.children.clear()
+                values[idx] = self._terminal_value(board)
+            else:
+                node.is_terminal = False
+                features.append(board_to_tensor(board, device=self._device))
+                mapping.append(idx)
+
+        if features:
+            stacked = torch.stack(features, dim=0)
+            output = model.inference(stacked)
+            logits = output.flatten_policy()
+            value_tensor = output.value.squeeze(1)
+
+            for pos, idx in enumerate(mapping):
+                node = nodes[idx]
+                board = boards[idx]
+                mask = legal_moves_mask(board, device=self._device)
+                priors = policy_from_masked_logits(logits[pos], mask)
+
+                node.stats.clear()
+                for move in board.legal_moves:
+                    move_index = encode_index(board, move)
+                    if move_index is None:
+                        continue
+                    node.stats[move_index] = _ChildStats(prior=float(priors[move_index].item()))
+
+                node.total_visits = 0
+                values[idx] = float(value_tensor[pos].item())
+
+        return values
+
+    @staticmethod
+    def _terminal_value(board: chess.Board) -> float:
+        outcome = board.outcome(claim_draw=True)
+        if outcome is None or outcome.winner is None:
+            return 0.0
+        return 1.0 if outcome.winner == board.turn else -1.0
 
 
 __all__ = ["AlphaZeroMCTS"]
